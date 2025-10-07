@@ -25,7 +25,6 @@ private:
       // Log message
       std::string name = transform.child_frame_id;
       if (name.substr(0, 3) == "sub") {
-        RCLCPP_INFO(this->get_logger(), "Received transform of %s", name.c_str());
         filtered_msg.header = transform.header;
         filtered_msg.header.frame_id = transform.child_frame_id;
         filtered_msg.pose.position.x = transform.transform.translation.x;
