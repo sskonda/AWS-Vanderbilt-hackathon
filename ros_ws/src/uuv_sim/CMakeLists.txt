@@ -7,15 +7,19 @@ endif()
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
+
 # uncomment the following section in order to fill in
 # further dependencies manually.
 # find_package(<dependency> REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(ros_ign_interfaces REQUIRED)
 
 add_executable(uuv_pose src/uuv_pose.cpp)
 target_include_directories(uuv_pose PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
 target_compile_features(uuv_pose PUBLIC c_std_99 cxx_std_17)  # Require C99 and C++17
+ament_target_dependencies(uuv_pose rclcpp ros_ign_interfaces)
 
 install(TARGETS uuv_pose
   DESTINATION lib/${PROJECT_NAME})
