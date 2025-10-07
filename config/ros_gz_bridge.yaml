@@ -1,0 +1,4 @@
+- ros_topic_name: /submarines/tf2
+  ros_type: tf2_msgs/msg/TFMessage
+  gz_topic_name: /tf
+  gz_type: ignition.msgs.Pose_V

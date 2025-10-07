@@ -18,13 +18,14 @@ class Event:
 def xyz(ps: PoseStamped):
     p = ps.pose.position
     return float(p.x), float(p.y), float(p.z)
+
 class ProximityEvent(Node):
     """Publishes a custom_msg/Event when a sub (header.frame_id starts with 'sub')
        enters a proximity radius around this node's own PoseStamped."""
     def __init__(self):
-        super().__init__('proximity_event_pub')
+        super().__init__('ProximityEvent')
 
-        # --- Parameters ---
+        # Parameters 
         self.declare_parameters('', [
             ('self_topic', '/event/pose'),
             ('event_topic', '/events/event_1'),
@@ -105,7 +106,7 @@ class ProximityEvent(Node):
 
 def main():
     rclpy.init()
-    node = proximity_event()
+    node = ProximityEvent()
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()
@@ -113,4 +114,6 @@ def main():
 if __name__ == '__main__':
     main()
 
-# example use case 
+# example use case run node 
+# ros2 run uuv_sim_py ProximityEvent_pub \
+#   --ros-args -p threshold_m:=50.0 -p event_topic:=/events/prox_hits
