@@ -13,13 +13,13 @@ setup(
     ],
     install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='you',
-    maintainer_email='you@example.com',
+    maintainer='nikhil',
+    maintainer_email='nikhil',
     description='Mini sim for UUV swarm',
     license='Apache-2.0',
     entry_points={
         'console_scripts': [
-            'uuv_event_sim = uuv_sim_py.sim:main',   # package.module:function
+            'sim = uuv_sim_py.sim:main',   # package.module:function
         ],
     },
 )

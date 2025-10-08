@@ -1,420 +1,538 @@
 #include <chrono>
-#include <cmath>
-#include <cstdlib>
 #include <string>
 #include <vector>
 #include <array>
 #include <memory>
 #include <algorithm>
-#include <deque>      // queue for IoT upload (ask nikhil how to implement wtfffffffwlkmvkwmfkwmkwm)
-#include <cctype>     
+#include <unordered_map>
+#include <sstream>
+#include <cmath>
+#include <functional>
 
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
-#include "custom_msg/msg/event.hpp"
+#include <geometry_msgs/msg/pose_array.hpp>
 
 using namespace std::chrono_literals;
 
-enum class MaintenanceStatus { WORKING, DUE_FOR_MAINTENANCE, FAILING };
-enum class PipelineStatus { GOOD, WARNING, CRITICAL_FAILURE };
-enum class Role { PATROL, MID_TIER };
-enum class BehaviorState { IDLE, PATROL, SURFACE, CHARGE, FAILSAFE };
+// roles and states 
+enum class Role     { SUB1, SUB2, MID_TIER };
+enum class MidState { SURFACE_INIT, HANDOFF_1, HANDOFF_2, SURFACE_RELAY, RETURN_END };
+enum class SubState { HOLD_A,  FOLLOW_A,     FOLLOW_B,   PATROL_C,      HOLD_B    };
 
-class SubNode : public rclcpp::Node
-{
+// helpers 
+static geometry_msgs::msg::Point XYZ(double x,double y,double z){ geometry_msgs::msg::Point p; p.x=x;p.y=y;p.z=z; return p; }
+static double now_unix() {
+  return std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+// plans + structures 
+struct Waypoint { double t; double x,y,z; };   // t is optional unix time if provided
+using Plan = std::vector<Waypoint>;
+
+static geometry_msgs::msg::PoseArray toPoseArray(const Plan& plan, const std::string& frame){
+  geometry_msgs::msg::PoseArray pa;
+  pa.header.frame_id = frame;
+  pa.poses.reserve(plan.size());
+  for(const auto& w: plan){
+    geometry_msgs::msg::Pose p;
+    p.position.x=w.x; p.position.y=w.y; p.position.z=w.z;
+    p.orientation.w = w.t; // store unix time in w (convention)
+    pa.poses.push_back(p);
+  }
+  return pa;
+}
+
+static Plan fromPoseArray(const geometry_msgs::msg::PoseArray& pa){
+  Plan plan; plan.reserve(pa.poses.size());
+  for(const auto& p: pa.poses)
+    plan.push_back(Waypoint{p.orientation.w, p.position.x, p.position.y, p.position.z});
+  std::sort(plan.begin(), plan.end(), [](auto&a,auto&b){return a.t<b.t;});
+  return plan;
+}
+
+// merge add into base; return number of newly added points
+static std::size_t mergeIntoCount(Plan& base, const Plan& add){
+  std::size_t newc = 0;
+  for(const auto& w: add){
+    bool has=false;
+    for(const auto& v: base){
+      if (std::fabs(v.t-w.t)<1e-6 && std::fabs(v.x-w.x)<1e-6 && std::fabs(v.y-w.y)<1e-6 && std::fabs(v.z-w.z)<1e-6){ has=true; break; }
+    }
+    if(!has){ base.push_back(w); ++newc; }
+  }
+  std::sort(base.begin(), base.end(), [](auto&a,auto&b){return a.t<b.t;});
+  return newc;
+}
+
+// linear interpolation of expected pose at time t; fallback to nearest
+static bool expectedPoseAt(const Plan& plan, double t, geometry_msgs::msg::Point& out){
+  if (plan.empty()) return false;
+  if (t <= plan.front().t){ out = XYZ(plan.front().x, plan.front().y, plan.front().z); return true; }
+  if (t >= plan.back().t) { out = XYZ(plan.back().x,  plan.back().y,  plan.back().z);  return true; }
+  for (std::size_t i=1;i<plan.size();++i){
+    if (t <= plan[i].t){
+      const auto& a = plan[i-1]; const auto& b = plan[i];
+      const double denom = std::max(1e-9, (b.t - a.t));
+      const double u = (t - a.t) / denom;
+      out = XYZ(a.x + u*(b.x-a.x), a.y + u*(b.y-a.y), a.z + u*(b.z-a.z));
+      return true;
+    }
+  }
+  return false;
+}
+
+class SubNode : public rclcpp::Node {
 public:
-  explicit SubNode(const std::string &sub_id)
+  explicit SubNode(const std::string& sub_id)
   : Node(sub_id + "_node"), sub_id_(sub_id)
   {
-    this->declare_parameter<std::string>("role", "PATROL");
-    this->declare_parameter<std::vector<std::string>>("team_ids", {"subA","subB","subC"});
+    // parameters 
+    this->declare_parameter<std::vector<std::string>>("team_ids",   {"subA","subB","subC"});
+    this->declare_parameter<std::string>("leader_id", "subA");       // leader at start_epoch
+    this->declare_parameter<double>("start_epoch",    0.0);          // common unix seconds for all
+    this->declare_parameter<double>("state_dwell_s",  20.0);         // default dwell per slot
+    this->declare_parameter<bool>  ("publish_current_pose", false);
 
-    std::string role_str = this->get_parameter("role").as_string();
-    team_ids_ = this->get_parameter("team_ids").as_string_array();
+    team_ids_            = this->get_parameter("team_ids").as_string_array();
+    leader_id_           = this->get_parameter("leader_id").as_string();
+    start_epoch_         = this->get_parameter("start_epoch").as_double();
+    dwell_s_             = this->get_parameter("state_dwell_s").as_double();
+    publish_current_pose_= this->get_parameter("publish_current_pose").as_bool();
 
-    if (role_str == "PATROL") current_role_ = Role::PATROL;
-    else if (role_str == "MID_TIER") current_role_ = Role::MID_TIER;
-    else RCLCPP_WARN(get_logger(), "Unknown role '%s', defaulting to PATROL", role_str.c_str());
+    // Keep provided order; ensure I'm present once; dedupe preserving first occurrences
+    if (std::find(team_ids_.begin(), team_ids_.end(), sub_id_) == team_ids_.end())
+      team_ids_.push_back(sub_id_);
+    std::vector<std::string> uniq; uniq.reserve(team_ids_.size());
+    for (auto& s: team_ids_) if (std::find(uniq.begin(), uniq.end(), s)==uniq.end()) uniq.push_back(s);
+    team_ids_.swap(uniq);
 
-    patrol_route_id_ = "route1";
-    route_start_ = {0.0, 0.0, -20.0};
-    route_end_   = {200.0, 100.0, -20.0};
-    route_estimated_time_ = 360.0;
+    auto it = std::find(team_ids_.begin(), team_ids_.end(), leader_id_);
+    if (it == team_ids_.end()) {
+      RCLCPP_WARN(get_logger(), "leader_id '%s' not in team_ids; using team_ids[0]", leader_id_.c_str());
+      leader0_idx_ = 0; leader_id_ = team_ids_.front();
+    } else {
+      leader0_idx_ = static_cast<int>(std::distance(team_ids_.begin(), it));
+    }
 
-    maintenance_status_ = MaintenanceStatus::WORKING;
-    pipeline_status_ = PipelineStatus::GOOD;
-    behavior_state_ = BehaviorState::IDLE;
+    if (start_epoch_ <= 0.0) {
+      start_epoch_ = std::ceil(now_unix()) + 2.0; // give a small sync window
+      RCLCPP_INFO(get_logger(), "[%s] start_epoch not set; using %.0f", sub_id_.c_str(), start_epoch_);
+    }
 
-    battery_ = 100.0;
-    last_surfaced_ = nowSec();
-    next_scheduled_surface_ = last_surfaced_ + 180.0;
-    assigned_grace_period_ = 40.0;
-    local_tile_id_ = "tile5";
+    // Publishers 
+    target_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("/" + sub_id_ + "/target_pose", 10);
+    if (publish_current_pose_) pose_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("/" + sub_id_ + "/pose", 10);
 
-    last_rotation_time_ = nowSec();
-    rotation_interval_s_ = 360.0;  // 20 min (surfacing + buffer) ? for demo?
+    // Plan pubs (MID uses these)
+    plans_pub_sub1_ = create_publisher<geometry_msgs::msg::PoseArray>("/plans/sub1", 10);
+    plans_pub_sub2_ = create_publisher<geometry_msgs::msg::PoseArray>("/plans/sub2", 10);
+    plans_pub_mid_  = create_publisher<geometry_msgs::msg::PoseArray>("/plans/mid",  10);
 
-    pose_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>(
-      "/" + sub_id_ + "/pose", 10);
-    event_pub_ = create_publisher<custom_msg::msg::Event>(
-      "/events/status", 10);  // generic out channel
+    // Echo pubs (publish based on current role, not node name)
+    echo_pub_sub1_ = create_publisher<geometry_msgs::msg::PoseArray>("/echo/sub1", 10);
+    echo_pub_sub2_ = create_publisher<geometry_msgs::msg::PoseArray>("/echo/sub2", 10);
+    echo_pub_mid_  = create_publisher<geometry_msgs::msg::PoseArray>("/echo/mid",  10);
 
-    event_sub_ = create_subscription<custom_msg::msg::Event>( // event listener 
-      "/events/event_1", 10, std::bind(&SubNode::onEvent, this, std::placeholders::_1));
+    // Relay pubs (surface relay to “satcom” or logger)
+    relay_pub_sub1_ = create_publisher<geometry_msgs::msg::PoseArray>("/relay/sub1", 10);
+    relay_pub_sub2_ = create_publisher<geometry_msgs::msg::PoseArray>("/relay/sub2", 10);
+    relay_pub_mid_  = create_publisher<geometry_msgs::msg::PoseArray>("/relay/mid",  10);
 
-    // main loop timer 
-    timer_ = create_wall_timer(500ms, std::bind(&SubNode::tick, this));
+    // Expected pose pubs (everyone publishes what they think others should be doing now)
+    exp_pub_sub1_ = create_publisher<geometry_msgs::msg::PoseStamped>("/expected/sub1/pose", 10);
+    exp_pub_sub2_ = create_publisher<geometry_msgs::msg::PoseStamped>("/expected/sub2/pose", 10);
+    exp_pub_mid_  = create_publisher<geometry_msgs::msg::PoseStamped>("/expected/mid/pose",  10);
+
+    // ---- Subscribers (lambda form; no std::bind extra args) ----
+    plans_sub_s1_ = create_subscription<geometry_msgs::msg::PoseArray>(
+      "/plans/sub1", 10,
+      [this](geometry_msgs::msg::PoseArray::ConstSharedPtr msg){
+        this->onPlanTopic(*msg, "sub1");
+      });
+
+    plans_sub_s2_ = create_subscription<geometry_msgs::msg::PoseArray>(
+      "/plans/sub2", 10,
+      [this](geometry_msgs::msg::PoseArray::ConstSharedPtr msg){
+        this->onPlanTopic(*msg, "sub2");
+      });
+
+    plans_sub_mid_ = create_subscription<geometry_msgs::msg::PoseArray>(
+      "/plans/mid", 10,
+      [this](geometry_msgs::msg::PoseArray::ConstSharedPtr msg){
+        this->onPlanTopic(*msg, "mid");
+      });
+
+    echo_sub_s1_ = create_subscription<geometry_msgs::msg::PoseArray>(
+      "/echo/sub1", 10,
+      [this](geometry_msgs::msg::PoseArray::ConstSharedPtr msg){
+        this->onPeerEcho(*msg, "sub1");
+      });
+
+    echo_sub_s2_ = create_subscription<geometry_msgs::msg::PoseArray>(
+      "/echo/sub2", 10,
+      [this](geometry_msgs::msg::PoseArray::ConstSharedPtr msg){
+        this->onPeerEcho(*msg, "sub2");
+      });
+
+    echo_sub_mid_ = create_subscription<geometry_msgs::msg::PoseArray>(
+      "/echo/mid", 10,
+      [this](geometry_msgs::msg::PoseArray::ConstSharedPtr msg){
+        this->onPeerEcho(*msg, "mid");
+      });
+
+    timer_ = create_wall_timer(std::chrono::duration<double>(0.25), std::bind(&SubNode::tick, this));
 
     RCLCPP_INFO(get_logger(),
-      "[%s] Node started | Role=%s | Route=%s | Tile=%s",
-      sub_id_.c_str(), roleToStr(current_role_).c_str(),
-      patrol_route_id_.c_str(), local_tile_id_.c_str());
+      "[%s] ring=%zu leader0=%s(idx=%d) epoch=%.0f dwell=%.1fs",
+      sub_id_.c_str(), team_ids_.size(), leader_id_.c_str(), leader0_idx_, start_epoch_, dwell_s_);
   }
 
 private:
-// variable 
+  struct Sched {
+    Role my_role;
+    MidState mid_state;    // valid if my_role==MID_TIER
+    SubState sub_state;    // valid if my_role!=MID_TIER
+    std::string id_mid, id_s1, id_s2;
+    int slot5;
+  };
+  Sched compute(double tunix) const {
+    const int N = static_cast<int>(team_ids_.size());
+    const double T = 5.0 * dwell_s_;            // 5-slot macro cycle
+    const double dt = std::max(0.0, tunix - start_epoch_);
+    const long rot_k = (T>0.0)? static_cast<long>(std::floor(dt / T)) : 0L;
+
+    const int leader_idx = (leader0_idx_ + static_cast<int>(rot_k % N) + N) % N;
+    const int s1_idx = (leader_idx + 1) % N;
+    const int s2_idx = (leader_idx + 2) % N;
+
+    const std::string& mid = team_ids_[leader_idx];
+    const std::string& s1  = team_ids_[s1_idx];
+    const std::string& s2  = team_ids_[s2_idx];
+
+    const long slot = (dwell_s_>0.0)? static_cast<long>(std::floor(std::fmod(dt, T) / dwell_s_)) : 0L;
+    const int slot5 = static_cast<int>((slot % 5 + 5) % 5);
+
+    MidState ms = MidState::SURFACE_INIT;
+    if      (slot5==1) ms=MidState::HANDOFF_1;
+    else if (slot5==2) ms=MidState::HANDOFF_2;
+    else if (slot5==3) ms=MidState::SURFACE_RELAY;
+    else if (slot5==4) ms=MidState::RETURN_END;
+
+    SubState ss = SubState::HOLD_A;
+    if      (slot5==1) ss=SubState::FOLLOW_A;
+    else if (slot5==2) ss=SubState::FOLLOW_B;
+    else if (slot5==3) ss=SubState::PATROL_C; 
+    else if (slot5==4) ss=SubState::HOLD_B;
+
+    Role r=Role::SUB1;
+    if (sub_id_==mid) r=Role::MID_TIER;
+    else if (sub_id_==s1) r=Role::SUB1;
+    else if (sub_id_==s2) r=Role::SUB2;
+
+    return Sched{r,ms,ss,mid,s1,s2,slot5};
+  }
+
+  // The canonical role key ("mid","sub1","sub2") 
+  std::string roleKeyNow() const {
+    const auto sch = compute(now_unix());
+    if (sch.my_role == Role::MID_TIER) return "mid";
+    if (sch.my_role == Role::SUB1)     return "sub1";
+    return "sub2";
+  }
+
+  geometry_msgs::msg::Point midTarget(MidState s) const {
+    switch(s){
+      case MidState::SURFACE_INIT: return XYZ(  0,  0,  -2);  // initial surface to fetch plans/reset
+      case MidState::HANDOFF_1:    return XYZ( 50, 20, -10);
+      case MidState::HANDOFF_2:    return XYZ( 50, 60, -10);
+      case MidState::SURFACE_RELAY:return XYZ(  0,  5,  -2);  // second surfacing to relay aggregated info
+      case MidState::RETURN_END:   return XYZ(100, 40, -10);
+    }
+    return XYZ(0,0,-5);
+  }
+  geometry_msgs::msg::Point sub1Target(SubState s) const {
+    switch(s){
+      case SubState::HOLD_A:   return XYZ( 20, 20, -20);
+      case SubState::FOLLOW_A: return XYZ( 35, 20, -20);
+      case SubState::FOLLOW_B: return XYZ( 35, 60, -20);
+      case SubState::PATROL_C: return XYZ( 10, 35, -22); // extra patrol during SURFACE_RELAY
+      case SubState::HOLD_B:   return XYZ( 20, 40, -20);
+    }
+    return XYZ(0,0,-20);
+  }
+  geometry_msgs::msg::Point sub2Target(SubState s) const {
+    switch(s){
+      case SubState::HOLD_A:   return XYZ( 20, 60, -20);
+      case SubState::FOLLOW_A: return XYZ( 35, 20, -20);
+      case SubState::FOLLOW_B: return XYZ( 35, 60, -20);
+      case SubState::PATROL_C: return XYZ( 10, 45, -22); // extra patrol during SURFACE_RELAY
+      case SubState::HOLD_B:   return XYZ( 20, 40, -20);
+    }
+    return XYZ(0,0,-20);
+  }
+
+  void tick(){
+    const double t = now_unix();
+    const auto sch = compute(t);
+
+    if (sch.slot5 != last_slot5_ || sch.id_mid != last_mid_id_) {
+      onSlotEnter(sch);
+      last_slot5_ = sch.slot5;
+      last_mid_id_ = sch.id_mid;
+    }
+
+    // Publish nav target per role/state
+    geometry_msgs::msg::PoseStamped tgt;
+    tgt.header.stamp = this->get_clock()->now();
+    tgt.header.frame_id = sub_id_;
+    if (sch.my_role == Role::MID_TIER) {
+      tgt.pose.position = midTarget(sch.mid_state);
+    } else if (sch.my_role == Role::SUB1) {
+      tgt.pose.position = sub1Target(sch.sub_state);
+    } else {
+      tgt.pose.position = sub2Target(sch.sub_state);
+    }
+    target_pub_->publish(tgt);
+    if (publish_current_pose_) { if (pose_pub_) pose_pub_->publish(tgt); }
+
+    publishExpectedPoses(t);
+
+    if (static_cast<int>(t) % 2 == 0 && (last_log_second_ != static_cast<int>(t))) {
+      last_log_second_ = static_cast<int>(t);
+      RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 2000,
+        "[%s] role=%s mid=%s s1=%s s2=%s slot=%d dwell=%.1f (added: s1=%zu s2=%zu mid=%zu)",
+        sub_id_.c_str(),
+        (sch.my_role==Role::MID_TIER?"MID":(sch.my_role==Role::SUB1?"SUB1":"SUB2")),
+        sch.id_mid.c_str(), sch.id_s1.c_str(), sch.id_s2.c_str(),
+        sch.slot5, dwell_s_,
+        added_since_surface_sub1_, added_since_surface_sub2_, added_since_surface_mid_);
+    }
+  }
+
+  // Called locally when we enter a new 0..4 slot (SURFACE_INIT/H1/H2/SURFACE_RELAY/RETURN)
+  void onSlotEnter(const Sched& sch){
+    // Reset per-slot publish flags so we only publish once in that slot
+    published_this_slot_ = false;
+
+    if (sch.my_role == Role::MID_TIER) {
+      switch (sch.mid_state) {
+        case MidState::SURFACE_INIT:
+          // Start-of-cycle surface: seed plans, reset per-cycle added counters, and LOG it.
+          RCLCPP_INFO(get_logger(),
+            "[%s] MID SURFACE_INIT: surfacing — uploading known plans (s1=%zu, s2=%zu, mid=%zu); downloading latest",
+            sub_id_.c_str(), known_sub1_.size(), known_sub2_.size(), known_mid_.size());
+          ensureSeedPlans();
+          resetAddedSinceSurface();
+          break;
+
+        case MidState::HANDOFF_1:
+          // Talk to current SUB1 (actual node id in log)
+          midHandoffOnce("sub1", sch.id_s1);
+          break;
+
+        case MidState::HANDOFF_2:
+          // Talk to current SUB2 (actual node id in log)
+          midHandoffOnce("sub2", sch.id_s2);
+          break;
+
+        case MidState::SURFACE_RELAY:
+          // Second surface: relay (publish) the merged knowledge and log the new info gathered
+          RCLCPP_INFO(get_logger(),
+            "[%s] MID SURFACE_RELAY: relaying merged knowledge (new since last surface: s1=%zu, s2=%zu, mid=%zu)",
+            sub_id_.c_str(), added_since_surface_sub1_, added_since_surface_sub2_, added_since_surface_mid_);
+          surfaceRelayAggregate();
+          // After relaying, reset counters to accumulate for next cycle
+          resetAddedSinceSurface();
+          break;
+
+        case MidState::RETURN_END:
+          RCLCPP_INFO(get_logger(), "[%s] MID RETURN_END: navigating to end-of-line / prep role rotation", sub_id_.c_str());
+          break;
+      }
+    } else {
+      // (optional) per-sub logs could go here
+    }
+  }
+
+  //  MID: one-shot handoff publisher in the slot (logs actual recipient id)
+  void midHandoffOnce(const std::string& role_key, const std::string& recipient_id){
+    if (published_this_slot_) return;
+    published_this_slot_ = true;
+
+    RCLCPP_INFO(get_logger(),
+      "[%s] MID handoff → %s (role=%s): publishing /plans/%s and /plans/mid; echoing /echo/mid",
+      sub_id_.c_str(), recipient_id.c_str(), role_key.c_str(), role_key.c_str());
+
+    // Publish to the intended recipient only + always publish mid plan
+    if (role_key == "sub1") {
+      plans_pub_sub1_->publish(toPoseArray(known_sub1_, "mid"));
+    } else {
+      plans_pub_sub2_->publish(toPoseArray(known_sub2_, "mid"));
+    }
+    plans_pub_mid_->publish (toPoseArray(known_mid_,  "mid"));
+
+    // Echo MID's previous plan on canonical /echo/mid so others can merge MID's older knowledge
+    if (!known_mid_prev_.empty()) {
+      auto pa = toPoseArray(known_mid_prev_, "mid_prev");
+      pa.header.stamp = this->get_clock()->now();
+      echo_pub_mid_->publish(pa);
+    }
+    known_mid_prev_ = known_mid_;
+  }
+
+  // Any node: plan topic handler (for sub1/sub2/mid) 
+  void onPlanTopic(const geometry_msgs::msg::PoseArray& pa, const std::string& topic_key /* "sub1"|"sub2"|"mid" */) {
+    const std::string my_key = roleKeyNow();   // who am I right now?
+    Plan new_plan = fromPoseArray(pa);
+
+    std::size_t added = 0;
+    if (topic_key=="sub1")      added = mergeIntoCount(known_sub1_, new_plan), added_since_surface_sub1_ += added;
+    else if (topic_key=="sub2") added = mergeIntoCount(known_sub2_, new_plan), added_since_surface_sub2_ += added;
+    else                        added = mergeIntoCount(known_mid_,  new_plan), added_since_surface_mid_  += added;
+
+    if (topic_key == my_key) {// pick which one to publish 
+      if (!my_prev_plan_.empty()) {
+        auto echo_pa = toPoseArray(my_prev_plan_, my_key + "_prev");
+        echo_pa.header.stamp = this->get_clock()->now();
+        echoPubForRoleKey(my_key)->publish(echo_pa); // publish to /echo/sub1 or /echo/sub2 or /echo/mid
+        RCLCPP_INFO(get_logger(), "[%s] ECHO %s prev plan (%zu pts)", sub_id_.c_str(), my_key.c_str(), my_prev_plan_.size());
+      }
+      my_prev_plan_ = my_plan_;
+      my_plan_ = std::move(new_plan);
+      RCLCPP_INFO(get_logger(), "[%s] MY PLAN updated for %s (%zu pts, +%zu new merged)", sub_id_.c_str(), my_key.c_str(), my_plan_.size(), added);
+    }
+  }
+
+  //  Any node: on peer echo, merge into knowledge & count
+  void onPeerEcho(const geometry_msgs::msg::PoseArray& pa, const std::string& who){
+    Plan p = fromPoseArray(pa);
+    std::size_t added = 0;
+    if (who=="sub1")      added = mergeIntoCount(known_sub1_, p), added_since_surface_sub1_ += added;
+    else if (who=="sub2") added = mergeIntoCount(known_sub2_, p), added_since_surface_sub2_ += added;
+    else if (who=="mid")  added = mergeIntoCount(known_mid_,  p), added_since_surface_mid_  += added;
+    RCLCPP_INFO(get_logger(), "[%s] Merged peer echo from %s (+%zu new pts)", sub_id_.c_str(), who.c_str(), added);
+  }
+
+  rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr& echoPubForRoleKey(const std::string& k){
+    if (k=="sub1") return echo_pub_sub1_;
+    if (k=="sub2") return echo_pub_sub2_;
+    return echo_pub_mid_;
+  }
+
+  // SURFACE_RELAY: publish merged knowledge and log counts 
+  void surfaceRelayAggregate(){
+    // publish full merged knowledge (you can switch to deltas if desired)
+    relay_pub_sub1_->publish(toPoseArray(known_sub1_, "relay"));
+    relay_pub_sub2_->publish(toPoseArray(known_sub2_, "relay"));
+    relay_pub_mid_->publish (toPoseArray(known_mid_,  "relay"));
+
+    RCLCPP_INFO(get_logger(),
+      "[%s] SURFACE_RELAY | relayed merged plans | new since last surface: sub1=%zu sub2=%zu mid=%zu",
+      sub_id_.c_str(), added_since_surface_sub1_, added_since_surface_sub2_, added_since_surface_mid_);
+  }
+
+  void resetAddedSinceSurface(){
+    added_since_surface_sub1_ = 0;
+    added_since_surface_sub2_ = 0;
+    added_since_surface_mid_  = 0;
+  }
+
+  //  Expected poses publisher (by role) 
+  void publishExpectedPoses(double t){
+    geometry_msgs::msg::PoseStamped ps; ps.header.stamp = this->get_clock()->now();
+    geometry_msgs::msg::Point pt;
+    if (expectedPoseAt(known_sub1_, t, pt)) { ps.header.frame_id="sub1"; ps.pose.position=pt; exp_pub_sub1_->publish(ps); }
+    if (expectedPoseAt(known_sub2_, t, pt)) { ps.header.frame_id="sub2"; ps.pose.position=pt; exp_pub_sub2_->publish(ps); }
+    if (expectedPoseAt(known_mid_,  t, pt)) { ps.header.frame_id="mid";  ps.pose.position=pt; exp_pub_mid_->publish(ps);  }
+  }
+
+  //  Seed some plans so handoffs have content (replace with file/param/IoT)
+  void ensureSeedPlans(){
+    if (known_mid_.empty()){
+      // two rendezvous cycles, times aligned to dwell slots
+      known_mid_ = {
+        {start_epoch_ +  1*dwell_s_, 50,20,-10},
+        {start_epoch_ +  2*dwell_s_, 50,60,-10},
+        {start_epoch_ +  6*dwell_s_, 50,20,-10},
+        {start_epoch_ +  7*dwell_s_, 50,60,-10},
+      };
+    }
+    if (known_sub1_.empty()){
+      known_sub1_ = {
+        {start_epoch_ +  1*dwell_s_, 35,20,-20},
+        {start_epoch_ +  2*dwell_s_, 35,60,-20},
+        {start_epoch_ +  6*dwell_s_, 35,20,-20},
+        {start_epoch_ +  7*dwell_s_, 35,60,-20},
+      };
+    }
+    if (known_sub2_.empty()){
+      known_sub2_ = {
+        {start_epoch_ +  1*dwell_s_, 35,20,-20},
+        {start_epoch_ +  2*dwell_s_, 35,60,-20},
+        {start_epoch_ +  6*dwell_s_, 35,20,-20},
+        {start_epoch_ +  7*dwell_s_, 35,60,-20},
+      };
+    }
+  }
+
   std::string sub_id_;
-  std::string patrol_route_id_;
-  std::array<double, 3> route_start_;
-  std::array<double, 3> route_end_;
-  double route_estimated_time_;
-  double battery_;
-  MaintenanceStatus maintenance_status_;
-  PipelineStatus pipeline_status_;
-  Role current_role_;
-  BehaviorState behavior_state_;
-  double last_surfaced_;
-  double next_scheduled_surface_;
-  double assigned_grace_period_;
-  std::string local_tile_id_;
-  double last_rotation_time_;
-  double rotation_interval_s_;
   std::vector<std::string> team_ids_;
+  std::string leader_id_;
+  int    leader0_idx_{0};
+  double start_epoch_{0.0};
+  double dwell_s_{20.0};
+  bool   publish_current_pose_{false};
 
-  // queue for future IoT upload saved for surfacing 
-  std::deque<custom_msg::msg::Event> iot_queue_;
-  const std::size_t iot_queue_max_ = 128;  
+  int  last_slot5_{-1};
+  std::string last_mid_id_;
+  bool published_this_slot_{false};
 
+  Plan my_plan_;
+  Plan my_prev_plan_;
+
+  // Knowledge caches (what I think the world’s plans are)
+  Plan known_sub1_;
+  Plan known_sub2_;
+  Plan known_mid_;
+  Plan known_mid_prev_;
+
+  // New points accumulated since last surface (for SURFACE_RELAY reporting)
+  std::size_t added_since_surface_sub1_{0};
+  std::size_t added_since_surface_sub2_{0};
+  std::size_t added_since_surface_mid_{0};
+
+  // Publishers
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr target_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_pub_;
-  rclcpp::Publisher<custom_msg::msg::Event>::SharedPtr event_pub_;
-  rclcpp::Subscription<custom_msg::msg::Event>::SharedPtr event_sub_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr plans_pub_sub1_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr plans_pub_sub2_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr plans_pub_mid_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr echo_pub_sub1_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr echo_pub_sub2_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr echo_pub_mid_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr relay_pub_sub1_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr relay_pub_sub2_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr relay_pub_mid_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr exp_pub_sub1_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr exp_pub_sub2_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr exp_pub_mid_;
+
+  // Subscribers
+  rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr plans_sub_s1_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr plans_sub_s2_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr plans_sub_mid_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr echo_sub_s1_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr echo_sub_s2_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr echo_sub_mid_;
+
+  // Timer
   rclcpp::TimerBase::SharedPtr timer_;
-
-  static double nowSec()
-  {
-    return std::chrono::duration<double>(
-      std::chrono::steady_clock::now().time_since_epoch()).count();
-  }
-
-  // helpers 
-  static std::string roleToStr(Role r)
-  {
-    switch (r) {
-      case Role::PATROL: return "PATROL";
-      case Role::MID_TIER: return "MID_TIER";
-    }
-    return "UNKNOWN";
-  }
-
-  static std::string maintToStr(MaintenanceStatus s)
-  {
-    switch (s) {
-      case MaintenanceStatus::WORKING: return "WORKING";
-      case MaintenanceStatus::DUE_FOR_MAINTENANCE: return "DUE_FOR_MAINTENANCE";
-      case MaintenanceStatus::FAILING: return "FAILING";
-    }
-    return "UNKNOWN";
-  }
-
-  static std::string pipeToStr(PipelineStatus s)
-  {
-    switch (s) {
-      case PipelineStatus::GOOD: return "GOOD";
-      case PipelineStatus::WARNING: return "WARNING";
-      case PipelineStatus::CRITICAL_FAILURE: return "CRITICAL_FAILURE";
-    }
-    return "UNKNOWN";
-  }
-
-  static std::string toLower(const std::string &s)
-  {
-    std::string o; o.reserve(s.size());
-    for (char c : s) o.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
-    return o;
-  }
-
-  // main loop, what happens every tick
-  void tick()
-  {
-    switch (current_role_) {
-      case Role::PATROL:   patrolBehavior(); break;
-      case Role::MID_TIER: midTierBehavior(); break;
-    }
-  }
-
- // patrol and mid tier behavior 
-  void patrolBehavior()
-  {
-    switch (behavior_state_) {
-      case BehaviorState::IDLE:
-        if (battery_ > 20.0)
-          behavior_state_ = BehaviorState::PATROL;
-        break;
-
-      case BehaviorState::PATROL:
-        if (battery_ <= 10.0) behavior_state_ = BehaviorState::CHARGE;
-        else if (nowSec() >= next_scheduled_surface_)
-          behavior_state_ = BehaviorState::SURFACE;
-        break;
-
-      case BehaviorState::SURFACE:
-        performSurfaceAndRecharge(10.0);
-        behavior_state_ = BehaviorState::PATROL;
-        break;
-
-      case BehaviorState::CHARGE:
-        performSurfaceAndRecharge(50.0);
-        if (battery_ >= 80.0) behavior_state_ = BehaviorState::PATROL;
-        break;
-
-      case BehaviorState::FAILSAFE:
-        if (battery_ > 30.0) behavior_state_ = BehaviorState::IDLE;
-        break;
-    }
-
-    publishPatrolPose(-20.0);  // lower altitude
-    applyResourceModel();
-    publishStatusToMidTier();
-  }
-
-  void midTierBehavior()
-  {
-    switch (behavior_state_) {
-      case BehaviorState::IDLE:
-        behavior_state_ = BehaviorState::PATROL;
-        break;
-
-      case BehaviorState::PATROL:
-        publishPatrolPose(-10.0);  // higher altitude
-        if (nowSec() >= next_scheduled_surface_)
-          behavior_state_ = BehaviorState::SURFACE;
-        break;
-
-      case BehaviorState::SURFACE:
-        performSurfaceAndRecharge(35.0);  // solar recharge
-        behavior_state_ = BehaviorState::PATROL;
-        break;
-
-      case BehaviorState::CHARGE:
-        performSurfaceAndRecharge(50.0);
-        if (battery_ >= 90.0)
-          behavior_state_ = BehaviorState::PATROL;
-        break;
-
-      case BehaviorState::FAILSAFE:
-        if (battery_ > 30.0)
-          behavior_state_ = BehaviorState::PATROL;
-        break;
-    }
-
-    applyResourceModel();
-  }
-
-  // publish the pose of the patrols
-  void publishPatrolPose(double z_depth)
-  {
-    const double elapsed = std::fmod(nowSec() - last_surfaced_, route_estimated_time_);
-    const double t = elapsed / route_estimated_time_;
-
-    const double x = route_start_[0] + t * (route_end_[0] - route_start_[0]);
-    const double y = route_start_[1] + t * (route_end_[1] - route_start_[1]);
-    const double z = z_depth;
-
-    geometry_msgs::msg::PoseStamped pose;
-    pose.header.stamp = now();
-    pose.header.frame_id = sub_id_;
-    pose.pose.position.x = x;
-    pose.pose.position.y = y;
-    pose.pose.position.z = z;
-
-    pose_pub_->publish(pose);
-  }
-
-  void applyResourceModel() // whether it needs to maintanance or charge 
-  {
-    if (behavior_state_ != BehaviorState::CHARGE)
-      battery_ = std::max(0.0, battery_ - 0.05);
-
-    if (battery_ < 30.0 && maintenance_status_ == MaintenanceStatus::WORKING)
-      maintenance_status_ = MaintenanceStatus::DUE_FOR_MAINTENANCE;
-    if (battery_ < 10.0)
-      pipeline_status_ = PipelineStatus::WARNING;
-    if (battery_ <= 0.0) {
-      pipeline_status_ = PipelineStatus::CRITICAL_FAILURE;
-      behavior_state_  = BehaviorState::FAILSAFE;
-    }
-  }
-
-  // mid tier surface, supposed to transmit and then recharge 
-  void performSurfaceAndRecharge(double recharge_amount)
-  {
-    last_surfaced_ = nowSec();
-    next_scheduled_surface_ = last_surfaced_ + 600.0;
-    battery_ = std::min(100.0, battery_ + recharge_amount);
-
-    RCLCPP_INFO(get_logger(),
-      "[%s] SURFACED | battery=%.1f%% | maint=%s | role=%s",
-      sub_id_.c_str(),
-      battery_,
-      maintToStr(maintenance_status_).c_str(),
-      roleToStr(current_role_).c_str());
-
-    // flush any queued events to "cloud" (simulated here with logs + re-publish)
-    flushIotQueue();
-
-    maybeRotateRole();
-  }
-
-  // rotate roles 
-  void maybeRotateRole()
-  {
-    double now_t = nowSec();
-    if (now_t - last_rotation_time_ < rotation_interval_s_)
-      return;
-
-    last_rotation_time_ = now_t;
-
-    int idx = std::distance(team_ids_.begin(),
-                std::find(team_ids_.begin(), team_ids_.end(), sub_id_));
-    int next_idx = (idx + 1) % team_ids_.size();
-
-    // round robin 
-    if (current_role_ == Role::PATROL && idx == 0)
-      current_role_ = Role::MID_TIER;
-    else if (current_role_ == Role::MID_TIER)
-      current_role_ = Role::PATROL;
-
-    RCLCPP_INFO(get_logger(),
-      "[%s] Role rotation -> %s (next rotation target: %s)",
-      sub_id_.c_str(),
-      roleToStr(current_role_).c_str(),
-      team_ids_[next_idx].c_str());
-  }
-
-  void publishStatusToMidTier()
-  {
-    custom_msg::msg::Event evt;
-    evt.header.stamp = now();
-    evt.header.frame_id = sub_id_;
-    evt.event_type = "STATUS_UPDATE";
-    evt.message = "Battery=" + std::to_string(battery_) +
-                  ", Maint=" + maintToStr(maintenance_status_) +
-                  ", Pipeline=" + pipeToStr(pipeline_status_);
-    evt.pose.position.x = 0.0;
-    evt.pose.position.y = 0.0;
-    evt.pose.position.z = 0.0;
-
-    event_pub_->publish(evt);
-  }
-
-  // event handler: use custom event message 
-  void onEvent(const custom_msg::msg::Event &evt)
-  {
-    const std::string et = toLower(evt.event_type);
-
-    RCLCPP_INFO(get_logger(),
-      "[%s] Event: %s | msg=%s | frame=%s",
-      sub_id_.c_str(),
-      et.c_str(),
-      evt.message.c_str(),
-      evt.header.frame_id.c_str());
-
-    if (et == "proximity_hit") {
-      // react: slight reroute
-      route_start_[0] += 5.0;
-      route_end_[0] += 5.0;
-      RCLCPP_WARN(get_logger(), "[%s] Adjusted course to avoid event region", sub_id_.c_str());
-      return;
-    }
-
-    if (et == "foreign_uuv") {
-      // record event, save to queue to eventually send to iot
-      enqueueIot(evt, "FOREIGN_UUV detected");
-      // if mid tier, can surface now 
-      if (current_role_ == Role::MID_TIER && behavior_state_ == BehaviorState::PATROL)
-        behavior_state_ = BehaviorState::SURFACE;
-      return;
-    }
-
-    if (et == "swarm_uuv") {
-      // will cause to dump data to uuv (simulate by sending DATA_DUMP to the caller frame)
-      dumpDataToUuv(evt.header.frame_id.empty() ? std::string("unknown") : evt.header.frame_id);
-      return;
-    }
-
-    if (et == "pipeline break" || et == "pipeline_break") {
-      // save to queue to send to iot as well
-      enqueueIot(evt, "PIPELINE_BREAK reported");
-      if (current_role_ == Role::MID_TIER && behavior_state_ == BehaviorState::PATROL)
-        behavior_state_ = BehaviorState::SURFACE;
-      return;
-    }
-  }
-
-  // add to IoT queue with small cap
-  void enqueueIot(custom_msg::msg::Event e, const std::string &note)
-  {
-    e.message = note + " | " + e.message;
-    if (iot_queue_.size() >= iot_queue_max_)
-      iot_queue_.pop_front();
-    iot_queue_.push_back(e);
-
-    RCLCPP_INFO(get_logger(), "[%s] queued IoT event (%zu/%zu): %s",
-                sub_id_.c_str(), iot_queue_.size(), iot_queue_max_, e.event_type.c_str());
-  }
-
-  // flush queued events "to cloud" when surfacing 
-  void flushIotQueue()
-  {
-    if (iot_queue_.empty()) return;
-
-    RCLCPP_INFO(get_logger(), "[%s] flushing %zu queued IoT events", sub_id_.c_str(),
-                iot_queue_.size());
-
-    while (!iot_queue_.empty()) {
-      auto e = iot_queue_.front();
-      iot_queue_.pop_front();
-
-      //send this via Greengrass/IoT. in irl fix ask nikhillll
-      event_pub_->publish(e);
-      RCLCPP_INFO(get_logger(), "[%s] flushed: %s | %s",
-                  sub_id_.c_str(), e.event_type.c_str(), e.message.c_str());
-    }
-  }
-
-  // simulate data dump to requesting UUV via an Event 
-  void dumpDataToUuv(const std::string &target_frame)
-  {
-    custom_msg::msg::Event dump;
-    dump.header.stamp = now();
-    dump.header.frame_id = sub_id_;     // sender id
-    dump.event_type = "DATA_DUMP";
-    dump.message = "telemetry:pose,battery,alerts; size=small";
-    dump.pose.position.x = 0.0;
-    dump.pose.position.y = 0.0;
-    dump.pose.position.z = 0.0;
-
-    event_pub_->publish(dump);
-
-    RCLCPP_INFO(get_logger(), "[%s] DATA_DUMP sent to %s",
-                sub_id_.c_str(), target_frame.c_str());
-  }
+  int last_log_second_{-1};
 };
 
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv){
   rclcpp::init(argc, argv);
-
   auto boot = std::make_shared<rclcpp::Node>("bootstrap");
   boot->declare_parameter<std::string>("sub_id");
   const std::string sub_id = boot->get_parameter("sub_id").as_string();
