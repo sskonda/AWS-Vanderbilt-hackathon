@@ -40,9 +40,17 @@ void loop() {
   // If data entered in Serial Monitor, send it to Tiva
   if (Serial.available()) {
     String msg = Serial.readStringUntil('\n'); // Read one line from USB serial
-    Serial2.println(msg);                      // Send to Tiva (UART2 TX)
+    Serial2.print(msg);                      // Send to Tiva (UART2 TX)
     Serial.print("Sent to Tiva: ");
     Serial.println(msg);
     delay(50);                                 // Small delay for pacing
+  }
+
+  if (Serial2.available())
+  {
+    String msg = Serial2.readStringUntil('\n');
+    Serial.print("From Tiva: ");
+    Serial.println(msg);
+    delay(50);
   }
 }
