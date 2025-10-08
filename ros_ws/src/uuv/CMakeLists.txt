@@ -27,8 +27,10 @@ ament_target_dependencies(uuv_planner
   custom_msg
 )
 
-install(TARGETS uuv_planner
-  DESTINATION lib/${PROJECT_NAME})
+install(TARGETS uuv_planner DESTINATION lib/${PROJECT_NAME})
+
+install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
+
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)

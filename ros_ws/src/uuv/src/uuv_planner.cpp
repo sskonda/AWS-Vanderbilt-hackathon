@@ -6,6 +6,8 @@
 #include <array>
 #include <memory>
 #include <algorithm>
+#include <deque>      // queue for IoT upload (ask nikhil how to implement wtfffffffwlkmvkwmfkwmkwm)
+#include <cctype>     
 
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
@@ -50,15 +52,15 @@ public:
     local_tile_id_ = "tile5";
 
     last_rotation_time_ = nowSec();
-    rotation_interval_s_ = 360.0;  // 20 min (surfacing + buffer)
+    rotation_interval_s_ = 360.0;  // 20 min (surfacing + buffer) ? for demo?
 
     pose_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>(
       "/" + sub_id_ + "/pose", 10);
     event_pub_ = create_publisher<custom_msg::msg::Event>(
-      "/events/status", 10);
-    event_sub_ = create_subscription<custom_msg::msg::Event>(
-      "/events/event_1", 10, std::bind(&SubNode::onEvent, this, std::placeholders::_1));
+      "/events/status", 10);  // generic out channel
 
+    event_sub_ = create_subscription<custom_msg::msg::Event>( // event listener 
+      "/events/event_1", 10, std::bind(&SubNode::onEvent, this, std::placeholders::_1));
 
     // main loop timer 
     timer_ = create_wall_timer(500ms, std::bind(&SubNode::tick, this));
@@ -88,6 +90,10 @@ private:
   double last_rotation_time_;
   double rotation_interval_s_;
   std::vector<std::string> team_ids_;
+
+  // queue for future IoT upload saved for surfacing 
+  std::deque<custom_msg::msg::Event> iot_queue_;
+  const std::size_t iot_queue_max_ = 128;  
 
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_pub_;
   rclcpp::Publisher<custom_msg::msg::Event>::SharedPtr event_pub_;
@@ -130,6 +136,13 @@ private:
     return "UNKNOWN";
   }
 
+  static std::string toLower(const std::string &s)
+  {
+    std::string o; o.reserve(s.size());
+    for (char c : s) o.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+    return o;
+  }
+
   // main loop, what happens every tick
   void tick()
   {
@@ -138,6 +151,7 @@ private:
       case Role::MID_TIER: midTierBehavior(); break;
     }
   }
+
  // patrol and mid tier behavior 
   void patrolBehavior()
   {
@@ -226,7 +240,6 @@ private:
     pose_pub_->publish(pose);
   }
 
-
   void applyResourceModel() // whether it needs to maintanance or charge 
   {
     if (behavior_state_ != BehaviorState::CHARGE)
@@ -255,6 +268,9 @@ private:
       battery_,
       maintToStr(maintenance_status_).c_str(),
       roleToStr(current_role_).c_str());
+
+    // flush any queued events to "cloud" (simulated here with logs + re-publish)
+    flushIotQueue();
 
     maybeRotateRole();
   }
@@ -301,27 +317,110 @@ private:
     event_pub_->publish(evt);
   }
 
+  // event handler: use custom event message 
   void onEvent(const custom_msg::msg::Event &evt)
-  { // use custom event message 
+  {
+    const std::string et = toLower(evt.event_type);
+
     RCLCPP_INFO(get_logger(),
       "[%s] Event: %s | msg=%s | frame=%s",
       sub_id_.c_str(),
-      evt.event_type.c_str(),
+      et.c_str(),
       evt.message.c_str(),
       evt.header.frame_id.c_str());
 
-    if (evt.event_type == "PROXIMITY_HIT") {
+    if (et == "proximity_hit") {
+      // react: slight reroute
       route_start_[0] += 5.0;
       route_end_[0] += 5.0;
       RCLCPP_WARN(get_logger(), "[%s] Adjusted course to avoid event region", sub_id_.c_str());
+      return;
     }
+
+    if (et == "foreign_uuv") {
+      // record event, save to queue to eventually send to iot
+      enqueueIot(evt, "FOREIGN_UUV detected");
+      // if mid tier, can surface now 
+      if (current_role_ == Role::MID_TIER && behavior_state_ == BehaviorState::PATROL)
+        behavior_state_ = BehaviorState::SURFACE;
+      return;
+    }
+
+    if (et == "swarm_uuv") {
+      // will cause to dump data to uuv (simulate by sending DATA_DUMP to the caller frame)
+      dumpDataToUuv(evt.header.frame_id.empty() ? std::string("unknown") : evt.header.frame_id);
+      return;
+    }
+
+    if (et == "pipeline break" || et == "pipeline_break") {
+      // save to queue to send to iot as well
+      enqueueIot(evt, "PIPELINE_BREAK reported");
+      if (current_role_ == Role::MID_TIER && behavior_state_ == BehaviorState::PATROL)
+        behavior_state_ = BehaviorState::SURFACE;
+      return;
+    }
+  }
+
+  // add to IoT queue with small cap
+  void enqueueIot(custom_msg::msg::Event e, const std::string &note)
+  {
+    e.message = note + " | " + e.message;
+    if (iot_queue_.size() >= iot_queue_max_)
+      iot_queue_.pop_front();
+    iot_queue_.push_back(e);
+
+    RCLCPP_INFO(get_logger(), "[%s] queued IoT event (%zu/%zu): %s",
+                sub_id_.c_str(), iot_queue_.size(), iot_queue_max_, e.event_type.c_str());
+  }
+
+  // flush queued events "to cloud" when surfacing 
+  void flushIotQueue()
+  {
+    if (iot_queue_.empty()) return;
+
+    RCLCPP_INFO(get_logger(), "[%s] flushing %zu queued IoT events", sub_id_.c_str(),
+                iot_queue_.size());
+
+    while (!iot_queue_.empty()) {
+      auto e = iot_queue_.front();
+      iot_queue_.pop_front();
+
+      //send this via Greengrass/IoT. in irl fix ask nikhillll
+      event_pub_->publish(e);
+      RCLCPP_INFO(get_logger(), "[%s] flushed: %s | %s",
+                  sub_id_.c_str(), e.event_type.c_str(), e.message.c_str());
+    }
+  }
+
+  // simulate data dump to requesting UUV via an Event 
+  void dumpDataToUuv(const std::string &target_frame)
+  {
+    custom_msg::msg::Event dump;
+    dump.header.stamp = now();
+    dump.header.frame_id = sub_id_;     // sender id
+    dump.event_type = "DATA_DUMP";
+    dump.message = "telemetry:pose,battery,alerts; size=small";
+    dump.pose.position.x = 0.0;
+    dump.pose.position.y = 0.0;
+    dump.pose.position.z = 0.0;
+
+    event_pub_->publish(dump);
+
+    RCLCPP_INFO(get_logger(), "[%s] DATA_DUMP sent to %s",
+                sub_id_.c_str(), target_frame.c_str());
   }
 };
 
 int main(int argc, char **argv)
 {
   rclcpp::init(argc, argv);
-  auto node = std::make_shared<SubNode>("subA");
+
+  auto boot = std::make_shared<rclcpp::Node>("bootstrap");
+  boot->declare_parameter<std::string>("sub_id");
+  const std::string sub_id = boot->get_parameter("sub_id").as_string();
+  boot.reset();
+
+  auto node = std::make_shared<SubNode>(sub_id);
   rclcpp::spin(node);
   rclcpp::shutdown();
   return 0;
