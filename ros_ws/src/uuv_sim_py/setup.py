@@ -3,7 +3,7 @@ from setuptools import setup
 package_name = 'uuv_sim_py'
 
 setup(
-    name=package_name,                 
+    name=package_name,                 # MUST be uuv_sim_py (underscore)
     version='0.0.1',
     packages=[package_name],
     data_files=[
@@ -19,7 +19,7 @@ setup(
     license='Apache-2.0',
     entry_points={
         'console_scripts': [
-            'sim = uuv_sim_py.sim:main',  
+            'uuv_event_sim = uuv_sim_py.sim:main',   # package.module:function
         ],
     },
 )
