@@ -29,4 +29,13 @@ def generate_launch_description():
         output='screen',
     )
 
-    return LaunchDescription([gz_sim_launch, gz_bridge_node, uuv_pose_node])
+    mqtt_client_node = Node(
+        package='mqtt_client',
+        executable='mqtt_client',
+        name='mqtt_client',
+        parameters=[
+            '/home/kapow/Development/AWS-Vanderbilt-hackathon/config/mqtt_client_params.yaml'
+        ]
+    )
+
+    return LaunchDescription([gz_sim_launch, gz_bridge_node, uuv_pose_node,])
