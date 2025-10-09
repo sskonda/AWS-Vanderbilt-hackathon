@@ -1,20 +1,64 @@
-<!-- Powered by AWS (separate line) -->
-<div align="center"style="text-align:center;margin-top:12px;">
-  <img src="docs/assets/aws/PoweredByAWS.png" alt="Powered by AWS" style="height:36px;object-fit:contain;">
-</div>
-<!-- AWS Service Logos -->
-<div align="center" style="display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:16px;">
-  <img src="docs/assets/aws/DynamoDB.png" alt="DynamoDB" style="height:60px;object-fit:contain;">
-  <img src="docs/assets/aws/App Runner.png" alt="App Runner" style="height:60px;object-fit:contain;">
-  <img src="docs/assets/aws/Elastic Container Registry.png" alt="Elastic Container Registry" style="height:60px;object-fit:contain;">
-  <img src="docs/assets/aws/IoT Core.png" alt="IoT Core" style="height:60px;object-fit:contain;">
-  <img src="docs/assets/aws/IoT Greengrass.png" alt="IoT Greengrass" style="height:60px;object-fit:contain;">
-  <img src="docs/assets/aws/S3 on Outposts.png" alt="S3 on Outposts" style="height:60px;object-fit:contain;">
-</div>
+<table>
+  <tr>
+    <!-- Team logo (left) -->
+    <td>
+      <img src="docs/assets/team_branding/TeamLogoNoBackground.png" alt="Team Logo" height="100">
+    </td>
+    <!-- AWS logos (right) -->
+    <td>
+      <img src="docs/assets/aws/DynamoDB.png" alt="DynamoDB" height="60">
+      <img src="docs/assets/aws/App Runner.png" alt="App Runner" height="60">
+      <img src="docs/assets/aws/Elastic Container Registry.png" alt="Elastic Container Registry" height="60">
+      <img src="docs/assets/aws/IoT Core.png" alt="IoT Core" height="60">
+      <img src="docs/assets/aws/IoT Greengrass.png" alt="IoT Greengrass" height="60">
+      <img src="docs/assets/aws/S3 on Outposts.png" alt="S3 on Outposts" height="60">
+      <br>
+      <img src="docs/assets/aws/PoweredByAWS.png" alt="Powered by AWS" height="40">
+    </td>
+  </tr>
+</table>
+
+# Operation Duloc
+Built by University of Florida team "What Are You Doing In My Swamp?"
+
+## Table of Contents
 
 
+## Project Overview
 
- # Operation Duloc
+### Build With
+
+### Technologies used
+* Arduino ESP32 BLE library
+* TI TivaWare peripheral drivers
+* Custom **G8RTOS** kernel (scheduling, semaphores, threads, UART/SPI drivers)
+
+### Architecture
+
+
+## Getting Started
+
+### Installation Instructions
+
+#### ESP32
+1. Install the Arduino ESP32 core ([https://github.com/espressif/arduino-esp32](https://github.com/espressif/arduino-esp32)).
+2. Open `BLE_to_TIVA_Frames.ino` in the Arduino IDE.
+3. For each ESP32 board:
+
+   * Set `OWN_NAME` to `"ESP0"`, `"ESP1"`, or `"ESP2"`.
+   * Upload the code.
+4. Connect ESP32 TX (GPIO 17 by default) to the Tiva UART RX.
+5. Ensure all grounds (ESP32 + Tiva + LCD) share a common ground.
+
+
+## License & acknowledgements
+
+This project was developed as part of the **Vanderbilt Hackathon submarine swarm project**.
+
+See `LICENSE` file for license information.
+
+
+# end of revised content
 
 ## Branches
 ### BLE → Tiva Simulation (Submarine Swarm Branch)**
