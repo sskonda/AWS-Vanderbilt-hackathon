@@ -123,12 +123,14 @@ static void project3D(float x, float y, float z, int *out_x, int *out_y)
 semaphore_t sem_GPIOE;
 semaphore_t sem_SPI;
 semaphore_t sem_UART;
+semaphore_t sem_UART4;
 semaphore_t sem_I2C;
 
 void Idle_Thread(void);
 
 // BEAGLEBONE
 void BeagleBone_Do(void);
+void Send_PO_Data(void);
 
 // BUTTONS
 void Read_Buttons(void);
@@ -144,6 +146,7 @@ void Read_ESP32(void);
 
 // HELPERS
 void printFloatXX(float val);
+void printFloatXX_UART4(float val);
 void computeTilt(int16_t ax, int16_t ay, int16_t az, Tilt_t *t);
 
 static float safe_float(float v) {

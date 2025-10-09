@@ -19,6 +19,7 @@ int main(void)
     G8RTOS_InitSemaphore(&sem_GPIOE, 1);
     G8RTOS_InitSemaphore(&sem_SPI, 1);
     G8RTOS_InitSemaphore(&sem_UART, 1);
+    G8RTOS_InitSemaphore(&sem_UART4, 1);
     G8RTOS_InitSemaphore(&sem_I2C, 1);
 
     // FIFO
@@ -33,6 +34,8 @@ int main(void)
     G8RTOS_AddThread(Draw_Data, 2, "draw data", 4);     // Thread 4
     G8RTOS_AddThread(BeagleBone_Do, 2, "handle beagle", 5);// Thread 5
     G8RTOS_AddThread(Get_Data, 2, "get data", 6);       // Thread 6
+    G8RTOS_AddThread(Draw_Position, 2, "draw position", 7); // Thread 7
+    G8RTOS_AddThread(Send_PO_Data, 2, "send PO data", 8); // Thread 8
 
     // Periodic Threads
     G8RTOS_Add_PeriodicEvent(Get_Joystick, 100, 1);

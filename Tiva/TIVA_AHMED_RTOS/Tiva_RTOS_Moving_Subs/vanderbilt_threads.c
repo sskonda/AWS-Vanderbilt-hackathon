@@ -263,6 +263,36 @@ void printFloatXX(float val) {
         UARTprintf("%d.%02d", integer_part, decimal_part);
 }
 
+void printFloatXX_UART4(float val) {
+    char buffer[20];
+    char* c;
+    int sign = (val < 0.0f) ? -1 : 1;
+    if (val < 0.0f) val = -val;  /* make positive for math */
+
+    /* Scale and round to two decimals */
+    int scaled = (int)(val * 100.0f + 0.5f);  /* e.g. 0.567 -> 57 */
+
+    int integer_part = scaled / 100;   /* 0 */
+    int decimal_part = scaled % 100;   /* 57 */
+
+    if (sign < 0)
+    {
+        snprintf(buffer, 20, "-%d.%02d", integer_part, decimal_part);
+        c = buffer;
+        while (*c) {
+            UARTCharPut(UART4_BASE, (unsigned char)(*c++));
+        }
+    }
+    else
+    {
+        snprintf(buffer, 20, "%d.%02d", integer_part, decimal_part);
+        c = buffer;
+        while (*c) {
+            UARTCharPut(UART4_BASE, (unsigned char)(*c++));
+        }
+    }
+}
+
 char* sub_0 = "SUB 0";
 char* sub_1 = "SUB 1";
 char* sub_2 = "SUB 2";
@@ -578,24 +608,51 @@ void Read_ESP32()
 {
     int c;
 
+    char* zero_f = "E0F\n";
+    char* one_f = "E1F\n";
+    char* two_f = "E2F\n";
+
+    char* zero_l = "E0L\n";
+    char* one_l = "E1L\n";
+    char* two_l = "E2L\n";
+
+    char* c_uart;
+
     while (1) {
         c = UART_ESP32_ReadChar();
         if (c != -1) {
+            G8RTOS_WaitSemaphore(&sem_UART4);
 #ifdef SUB_0
             if (c == '1')
             {
                 current_state_sub_1 = 0;
+                c_uart = one_f;
+                while (*c_uart) {
+                    UARTCharPut(UART4_BASE, (unsigned char)(*c_uart++));
+                }
             }
             else if (c == '2')
             {
+                c_uart = two_f;
+                while (*c_uart) {
+                    UARTCharPut(UART4_BASE, (unsigned char)(*c_uart++));
+                }
                 current_state_sub_2 = 0;
             }
             else if (c == (int)'B')
             {
+                c_uart = one_l;
+                while (*c_uart) {
+                    UARTCharPut(UART4_BASE, (unsigned char)(*c_uart++));
+                }
                 current_state_sub_1 = 1;
             }
             else if (c == (int)'C')
             {
+                c_uart = two_l;
+                while (*c_uart) {
+                    UARTCharPut(UART4_BASE, (unsigned char)(*c_uart++));
+                }
                 current_state_sub_2 = 1;
             }
 #endif
@@ -603,18 +660,34 @@ void Read_ESP32()
 #ifdef SUB_1
             if (c == '0')
             {
+                c_uart = zero_f;
+                while (*c_uart) {
+                    UARTCharPut(UART4_BASE, (unsigned char)(*c_uart++));
+                }
                 current_state_sub_1 = 0;
             }
             else if (c == '2')
             {
+                c_uart = two_f;
+                while (*c_uart) {
+                    UARTCharPut(UART4_BASE, (unsigned char)(*c_uart++));
+                }
                 current_state_sub_2 = 0;
             }
             else if (c == (int)'A')
             {
+                c_uart = zero_l;
+                while (*c_uart) {
+                    UARTCharPut(UART4_BASE, (unsigned char)(*c_uart++));
+                }
                 current_state_sub_1 = 1;
             }
             else if (c == (int)'C')
             {
+                c_uart = two_l;
+                while (*c_uart) {
+                    UARTCharPut(UART4_BASE, (unsigned char)(*c_uart++));
+                }
                 current_state_sub_2 = 1;
             }
 #endif
@@ -622,23 +695,39 @@ void Read_ESP32()
 #ifdef SUB_2
             if (c == '0')
             {
+                c_uart = zero_f;
+                while (*c_uart) {
+                    UARTCharPut(UART4_BASE, (unsigned char)(*c_uart++));
+                }
                 current_state_sub_1 = 0;
             }
             else if (c == '1')
             {
+                c_uart = one_f;
+                while (*c_uart) {
+                    UARTCharPut(UART4_BASE, (unsigned char)(*c_uart++));
+                }
                 current_state_sub_2 = 0;
             }
             else if (c == (int)'A')
             {
+                c_uart = zero_l;
+                while (*c_uart) {
+                    UARTCharPut(UART4_BASE, (unsigned char)(*c_uart++));
+                }
                 current_state_sub_1 = 1;
             }
             else if (c == (int)'B')
             {
+                c_uart = one_l;
+                while (*c_uart) {
+                    UARTCharPut(UART4_BASE, (unsigned char)(*c_uart++));
+                }
                 current_state_sub_2 = 1;
             }
 #endif
 
-
+            G8RTOS_SignalSemaphore(&sem_UART4);
             G8RTOS_WaitSemaphore(&sem_UART);
             UARTprintf("%c", (char)c);
             G8RTOS_SignalSemaphore(&sem_UART);
@@ -669,37 +758,37 @@ void Read_Buttons() {
         G8RTOS_WaitSemaphore(&sem_UART);
         if (buttonVal == 251){
 
-            temp_char = s_1;
+//            temp_char = s_1;
             UARTprintf("Button 1 Pressed\n");
-            while (*temp_char) {
-                UARTCharPut(UART4_BASE, (unsigned char)(*temp_char++));
-            }
+//            while (*temp_char) {
+//                UARTCharPut(UART4_BASE, (unsigned char)(*temp_char++));
+//            }
 
         }
         else if(buttonVal == 253){
 
-            temp_char = s_2;
+//            temp_char = s_2;
             UARTprintf("Button 2 Pressed\n");
-            while (*temp_char) {
-                UARTCharPut(UART4_BASE, (unsigned char)(*temp_char++));
-            }
+//            while (*temp_char) {
+//                UARTCharPut(UART4_BASE, (unsigned char)(*temp_char++));
+//            }
 
         }
         else if(buttonVal == 247){
 
-            temp_char = s_3;
+//            temp_char = s_3;
             UARTprintf("Button 3 Pressed\n");
-            while (*temp_char) {
-                UARTCharPut(UART4_BASE, (unsigned char)(*temp_char++));
-            }
+//            while (*temp_char) {
+//                UARTCharPut(UART4_BASE, (unsigned char)(*temp_char++));
+//            }
         }
         else if(buttonVal == 239){
 
-            temp_char = s_4;
+//            temp_char = s_4;
             UARTprintf("Button 4 Pressed\n");
-            while (*temp_char) {
-                UARTCharPut(UART4_BASE, (unsigned char)(*temp_char++));
-            }
+//            while (*temp_char) {
+//                UARTCharPut(UART4_BASE, (unsigned char)(*temp_char++));
+//            }
         }
         G8RTOS_SignalSemaphore(&sem_UART);
         GPIOIntClear(GPIO_PORTE_BASE, GPIO_PIN_4);
@@ -760,6 +849,39 @@ void BeagleBone_Do()
 
         sleep(5);
     }
+}
+
+void Send_PO_Data(void)
+{
+    char buffer[60] = {0};
+    char* c;
+
+    while(1)
+    {
+        G8RTOS_WaitSemaphore(&sem_UART4);
+        // Position
+        snprintf(buffer, 60, "P,%d,%d,%d\n", ship_state.px, ship_state.py, ship_state.pz);
+        c = buffer;
+        while (*c) {
+            UARTCharPut(UART4_BASE, (unsigned char)(*c++));
+        }
+        sleep(10);
+        // Orientation
+
+        UARTCharPut(UART4_BASE, (unsigned char)'O');
+        UARTCharPut(UART4_BASE, (unsigned char)',');
+        printFloatXX_UART4(ship_state.fx);
+        UARTCharPut(UART4_BASE, (unsigned char)',');
+        printFloatXX_UART4(ship_state.fy);
+        UARTCharPut(UART4_BASE, (unsigned char)',');
+        printFloatXX_UART4(ship_state.fz);
+        UARTCharPut(UART4_BASE, (unsigned char)'\n');
+
+        G8RTOS_SignalSemaphore(&sem_UART4);
+
+        sleep(500);
+    }
+
 }
 
 // Periodic Threads
