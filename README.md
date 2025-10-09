@@ -1,6 +1,6 @@
 <!-- Powered by AWS (separate line) -->
 <div align="center"style="text-align:center;margin-top:12px;">
-  <img src="docs/assets/aws/PoweredByAWS.png" alt="Powered by AWS" style="height:64px;object-fit:contain;">
+  <img src="docs/assets/aws/PoweredByAWS.png" alt="Powered by AWS" style="height:36px;object-fit:contain;">
 </div>
 <!-- AWS Service Logos -->
 <div align="center" style="display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:16px;">
