@@ -1,4 +1,20 @@
-# Operation Duloc
+<!-- Powered by AWS (separate line) -->
+<div align="center"style="text-align:center;margin-top:12px;">
+  <img src="docs/assets/aws/PoweredByAWS.png" alt="Powered by AWS" style="height:64px;object-fit:contain;">
+</div>
+<!-- AWS Service Logos -->
+<div align="center" style="display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:16px;">
+  <img src="docs/assets/aws/DynamoDB.png" alt="DynamoDB" style="height:60px;object-fit:contain;">
+  <img src="docs/assets/aws/App Runner.png" alt="App Runner" style="height:60px;object-fit:contain;">
+  <img src="docs/assets/aws/Elastic Container Registry.png" alt="Elastic Container Registry" style="height:60px;object-fit:contain;">
+  <img src="docs/assets/aws/IoT Core.png" alt="IoT Core" style="height:60px;object-fit:contain;">
+  <img src="docs/assets/aws/IoT Greengrass.png" alt="IoT Greengrass" style="height:60px;object-fit:contain;">
+  <img src="docs/assets/aws/S3 on Outposts.png" alt="S3 on Outposts" style="height:60px;object-fit:contain;">
+</div>
+
+
+
+ # Operation Duloc
 
 ## Branches
 ### BLE → Tiva Simulation (Submarine Swarm Branch)**
