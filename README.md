@@ -26,9 +26,9 @@ Built by University of Florida team "What Are You Doing In My Swamp?"
 
 ## Project Overview
 
-### Build With
+### Built with:
 
-### Technologies used
+### Technologies used:
 * Arduino ESP32 BLE library
 * TI TivaWare peripheral drivers
 * Custom **G8RTOS** kernel (scheduling, semaphores, threads, UART/SPI drivers)
