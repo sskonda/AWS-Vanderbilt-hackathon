@@ -7,6 +7,8 @@
 #include "general_drivers.h"
 #include <math.h>
 
+#define SUB_0
+
 uint8_t last_state_sub_1 = 1;
 uint8_t current_state_sub_1 = 0;
 
@@ -272,6 +274,43 @@ void Draw_Subs()
 
     G8RTOS_WaitSemaphore(&sem_SPI);
 
+#ifdef SUB_0
+    for (int i = 0; i < 5; i++)
+    {
+        display_setCursor(30 + i*11, 320 - 30);
+        display_setTextColor(0xFFFF);
+        display_setTextSize(2);
+        display_print(sub_1[i]);
+    }
+
+    for (int i = 0; i < 5; i++)
+    {
+        display_setCursor(150 + i*11, 320 - 30);
+        display_setTextColor(0xFFFF);
+        display_setTextSize(2);
+        display_print(sub_2[i]);
+    }
+#endif
+
+#ifdef SUB_1
+    for (int i = 0; i < 5; i++)
+    {
+        display_setCursor(30 + i*11, 320 - 30);
+        display_setTextColor(0xFFFF);
+        display_setTextSize(2);
+        display_print(sub_0[i]);
+    }
+
+    for (int i = 0; i < 5; i++)
+    {
+        display_setCursor(150 + i*11, 320 - 30);
+        display_setTextColor(0xFFFF);
+        display_setTextSize(2);
+        display_print(sub_2[i]);
+    }
+#endif
+
+#ifdef SUB_2
     for (int i = 0; i < 5; i++)
     {
         display_setCursor(30 + i*11, 320 - 30);
@@ -287,6 +326,9 @@ void Draw_Subs()
         display_setTextSize(2);
         display_print(sub_1[i]);
     }
+#endif
+
+
 
     G8RTOS_SignalSemaphore(&sem_SPI);
 
@@ -539,6 +581,45 @@ void Read_ESP32()
     while (1) {
         c = UART_ESP32_ReadChar();
         if (c != -1) {
+#ifdef SUB_0
+            if (c == '1')
+            {
+                current_state_sub_1 = 0;
+            }
+            else if (c == '2')
+            {
+                current_state_sub_2 = 0;
+            }
+            else if (c == (int)'B')
+            {
+                current_state_sub_1 = 1;
+            }
+            else if (c == (int)'C')
+            {
+                current_state_sub_2 = 1;
+            }
+#endif
+
+#ifdef SUB_1
+            if (c == '0')
+            {
+                current_state_sub_1 = 0;
+            }
+            else if (c == '2')
+            {
+                current_state_sub_2 = 0;
+            }
+            else if (c == (int)'A')
+            {
+                current_state_sub_1 = 1;
+            }
+            else if (c == (int)'C')
+            {
+                current_state_sub_2 = 1;
+            }
+#endif
+
+#ifdef SUB_2
             if (c == '0')
             {
                 current_state_sub_1 = 0;
@@ -555,6 +636,9 @@ void Read_ESP32()
             {
                 current_state_sub_2 = 1;
             }
+#endif
+
+
             G8RTOS_WaitSemaphore(&sem_UART);
             UARTprintf("%c", (char)c);
             G8RTOS_SignalSemaphore(&sem_UART);
