@@ -1,6 +1,7 @@
-# README — BLE → Tiva Simulation (Submarine Swarm Branch)
+# Operation Duloc
 
-**Branch purpose:**
+## Branches
+### BLE → Tiva Simulation (Submarine Swarm Branch)**
 This branch implements a BLE-based *simulation* of the optical transceivers used on the submarine swarm.
 Because we do not have the physical optical transceivers yet, **ESP32 boards act as stand-ins** that advertise a short BLE packet and scan for each other. When an ESP32 detects (or loses) another ESP32 nearby, it sends a single ASCII character over UART to the Tiva to indicate that connection state.
 
