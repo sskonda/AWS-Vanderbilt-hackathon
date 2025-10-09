@@ -417,58 +417,91 @@ void Get_Data()
     }
 }
 
+void Draw_Position()
+{
+    // draw position text
+    char* position_text = "Position";
+    char buffer[10] = {0};
+    char c;
+    uint32_t count;
+
+    G8RTOS_WaitSemaphore(&sem_SPI);
+
+    for (int i = 0; i < 8; i++)
+    {
+        display_setCursor(125 + 11*i, 150);
+        display_setTextColor(0xFFFF);
+        display_setTextSize(2);
+        display_print(position_text[i]);
+    }
+
+    G8RTOS_SignalSemaphore(&sem_SPI);
+
+    while(1)
+    {
+
+        G8RTOS_WaitSemaphore(&sem_SPI);
+
+        ST7789_DrawRectangle(125, 105, 90, 20, 0);
+
+        // print x
+        snprintf(buffer, 10, "X: %d", ship_state.px);
+        c = buffer[0];
+        count = 0;
+        while (c != 0)
+        {
+            display_setCursor(125 + count*11, 120);
+            display_setTextColor(0xFFFF);
+            display_setTextSize(2);
+            display_print(c);
+            count += 1;
+            c = buffer[count];
+        }
+
+        ST7789_DrawRectangle(125, 75, 90, 20, 0);
+
+        // print y
+        snprintf(buffer, 10, "Y: %d", ship_state.py);
+        c = buffer[0];
+        count = 0;
+        while (c != 0)
+        {
+            display_setCursor(125 + count*11, 90);
+            display_setTextColor(0xFFFF);
+            display_setTextSize(2);
+            display_print(c);
+            count += 1;
+            c = buffer[count];
+        }
+
+        ST7789_DrawRectangle(125, 45, 90, 20, 0);
+
+        // print z
+        snprintf(buffer, 10, "Z: %d", ship_state.pz);
+        c = buffer[0];
+        count = 0;
+        while (c != 0)
+        {
+            display_setCursor(125 + count*11, 60);
+            display_setTextColor(0xFFFF);
+            display_setTextSize(2);
+            display_print(c);
+            count += 1;
+            c = buffer[count];
+        }
+
+        G8RTOS_SignalSemaphore(&sem_SPI);
+
+        sleep(1000);
+    }
+}
+
 
 void Draw_Data()
 {
-    // get depth
-//    uint32_t depth = 10;
-//
-//    while (1)
-//    {
-//        if (depth == 10)
-//        {
-//            depth = 20;
-//        }
-//        else if (depth == 20)
-//        {
-//            depth = 30;
-//        }
-//        else if (depth == 30)
-//        {
-//            depth = 10;
-//        }
-//
-//        // print depth
-//        char buffer[20] = {0};
-//
-//        snprintf(buffer, 20, "Depth: %d", depth);
-//
-//        int count = 0;
-//        char c = buffer[0];
-//        G8RTOS_WaitSemaphore(&sem_SPI);
-//        // black box
-//
-//        ST7789_DrawRectangle(30, 45, 150, 20, 0);
-//
-//
-//        // data
-//        while(c != 0)
-//        {
-//            display_setCursor(30 + count*11, 60);
-//            display_setTextColor(0xFFFF);
-//            display_setTextSize(2);
-//            display_print(c);
-//            count += 1;
-//            c = buffer[count];
-//        }
-//        G8RTOS_SignalSemaphore(&sem_SPI);
-//
-//        sleep(1000);
-//    }
 
     uint16_t x0 = 50;
     uint16_t y0 = 100;
-    uint16_t color = ST7789_RED;
     float prev_ship_fx = ship_state.fx;
     float prev_ship_fy = ship_state.fy;
     float prev_ship_fz = ship_state.fz;
@@ -481,7 +514,7 @@ void Draw_Data()
 
         ST7789_Draw3DVectorThick5(x0, y0, prev_ship_fz, (-1.0)*prev_ship_fy, prev_ship_fx, 0x0000);
 
-        ST7789_Draw3DVectorThick5(x0, y0, ship_state.fz, (-1.0)*ship_state.fy, ship_state.fx, color);
+        ST7789_Draw3DVectorThick5(x0, y0, ship_state.fz, (-1.0)*ship_state.fy, ship_state.fx, 0xFFFF);
 
         prev_ship_fx = ship_state.fx;
         prev_ship_fy = ship_state.fy;

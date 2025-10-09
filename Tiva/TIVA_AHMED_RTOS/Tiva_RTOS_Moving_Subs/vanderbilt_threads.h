@@ -137,6 +137,7 @@ void Read_Buttons(void);
 void Draw_Subs(void);
 void Draw_Data(void);
 void Get_Data(void);
+void Draw_Position(void);
 
 // ESP32
 void Read_ESP32(void);
