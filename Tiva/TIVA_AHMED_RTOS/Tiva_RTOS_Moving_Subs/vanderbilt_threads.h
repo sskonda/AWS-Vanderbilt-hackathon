@@ -84,6 +84,42 @@ static void updateShipPosition(ShipState *ship, Tilt_t tilt) {
     ship->pz += (int32_t)(ship->fz * ship->thrust);
 }
 
+//static inline void project3D(float x, float y, float z, int *out_x, int *out_y)
+//{
+//    const float l = 0.5f;
+//    const float ca = 0.70710678f; // cos(45°)
+//    const float sa = 0.70710678f; // sin(45°)
+//
+//    float px = x + l * z * ca;
+//    float py = -y + l * z * sa; // negative y => up on screen
+//
+//    // simple round-to-nearest without roundf()
+//    int rx = (int)(px + (px >= 0.0f ? 0.5f : -0.5f));
+//    int ry = (int)(py + (py >= 0.0f ? 0.5f : -0.5f));
+//
+//    *out_x = rx;
+//    *out_y = ry;
+//}
+
+static inline int fround_to_int(float v)
+{
+    return (int)(v + (v >= 0.0f ? 0.5f : -0.5f));
+}
+
+/* same cabinet projection used previously */
+static void project3D(float x, float y, float z, int *out_x, int *out_y)
+{
+    const float l  = 0.5f;
+    const float ca = 0.70710678f; /* cos(45°) */
+    const float sa = 0.70710678f; /* sin(45°) */
+
+    float px = x + l * z * ca;
+    float py = -y + l * z * sa; /* -y so positive Y in 3D goes up on screen */
+
+    *out_x = fround_to_int(px);
+    *out_y = fround_to_int(py);
+}
+
 semaphore_t sem_GPIOE;
 semaphore_t sem_SPI;
 semaphore_t sem_UART;
@@ -119,6 +155,16 @@ static float clampf(float v, float lo, float hi) {
     if (v > hi) return hi;
     return v;
 }
+
+void ST7789_DrawThickLine5(uint16_t x0, uint16_t y0,
+                           uint16_t x1, uint16_t y1,
+                           uint16_t color);
+
+void ST7789_Draw3DAxes_C(uint16_t x0, uint16_t y0);
+
+void ST7789_Draw3DVectorThick5(uint16_t x0, uint16_t y0,
+                               float ux, float uy, float uz,
+                               uint16_t color);
 
 // PERIODIC
 void Get_Joystick(void);

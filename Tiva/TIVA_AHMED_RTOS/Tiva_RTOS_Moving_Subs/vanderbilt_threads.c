@@ -21,6 +21,213 @@ void Idle_Thread(void){
     while(1){}
 }
 
+void ST7789_DrawThickLine5(uint16_t x0, uint16_t y0,
+                           uint16_t x1, uint16_t y1,
+                           uint16_t color)
+{
+    int dx = (int)x1 - (int)x0;
+    int dy = (int)y1 - (int)y0;
+    double len = sqrt((double)dx*dx + (double)dy*dy);
+
+    // If the endpoints coincide, draw a 5x5 filled square centered at the point
+    if (len < 1e-6) {
+        int half = 2; // because width = 5 -> offsets -2..+2
+        for (int yy = -half; yy <= half; ++yy) {
+            for (int xx = -half; xx <= half; ++xx) {
+                int px = (int)x0 + xx;
+                int py = (int)y0 + yy;
+                if (px < 0) px = 0;
+                if (py < 0) py = 0;
+                ST7789_DrawLine((uint16_t)px, (uint16_t)py, (uint16_t)px, (uint16_t)py, color);
+            }
+        }
+        return;
+    }
+
+    // Perpendicular vector to the line is (-dy, dx).
+    // Normalize it and draw five parallel lines offset by -2..+2 units.
+    for (int offset = -2; offset <= 2; ++offset) {
+        int shift_x = (int) round(( -dy * (double)offset ) / len);
+        int shift_y = (int) round((  dx * (double)offset ) / len);
+
+        int sx0 = (int)x0 + shift_x;
+        int sy0 = (int)y0 + shift_y;
+        int sx1 = (int)x1 + shift_x;
+        int sy1 = (int)y1 + shift_y;
+
+        // Prevent negative cast issues (optional clamp; adapt if you have known screen extents)
+        if (sx0 < 0) sx0 = 0;
+        if (sy0 < 0) sy0 = 0;
+        if (sx1 < 0) sx1 = 0;
+        if (sy1 < 0) sy1 = 0;
+
+        ST7789_DrawLine((uint16_t)sx0, (uint16_t)sy0, (uint16_t)sx1, (uint16_t)sy1, color);
+    }
+}
+
+void ST7789_Draw3DAxes_C(uint16_t x0, uint16_t y0)
+{
+    const float length = 100.0f;
+    const float half = length * 0.5f;
+
+    /* Colors in RGB565 */
+    const uint16_t COLOR_X = 0xF800; // red
+    const uint16_t COLOR_Y = 0x07E0; // green
+    const uint16_t COLOR_Z = 0x001F; // blue
+
+    int sx0, sy0, sx1, sy1;
+    /* X axis: (-half, 0, 0) -> (+half, 0, 0) */
+    project3D(-half, 0.0f, 0.0f, &sx0, &sy0);
+    project3D( half, 0.0f, 0.0f, &sx1, &sy1);
+    {
+        int ex0 = (int)x0 + sx0;
+        int ey0 = (int)y0 + sy0;
+        int ex1 = (int)x0 + sx1;
+        int ey1 = (int)y0 + sy1;
+        if (ex0 < 0) ex0 = 0; if (ey0 < 0) ey0 = 0;
+        if (ex1 < 0) ex1 = 0; if (ey1 < 0) ey1 = 0;
+        ST7789_DrawLine((uint16_t)ex0, (uint16_t)ey0, (uint16_t)ex1, (uint16_t)ey1, COLOR_X);
+    }
+
+    /* Y axis: (0, -half, 0) -> (0, +half, 0) */
+    int yx0, yy0, yx1, yy1;
+    project3D(0.0f, -half, 0.0f, &yx0, &yy0);
+    project3D(0.0f,  half, 0.0f, &yx1, &yy1);
+    {
+        int ex0 = (int)x0 + yx0;
+        int ey0 = (int)y0 + yy0;
+        int ex1 = (int)x0 + yx1;
+        int ey1 = (int)y0 + yy1;
+        if (ex0 < 0) ex0 = 0; if (ey0 < 0) ey0 = 0;
+        if (ex1 < 0) ex1 = 0; if (ey1 < 0) ey1 = 0;
+        ST7789_DrawLine((uint16_t)ex0, (uint16_t)ey0, (uint16_t)ex1, (uint16_t)ey1, COLOR_Y);
+    }
+
+    /* Z axis: (0,0,-half) -> (0,0,+half) */
+    int zx0, zy0, zx1, zy1;
+    project3D(0.0f, 0.0f, -half, &zx0, &zy0);
+    project3D(0.0f, 0.0f,  half, &zx1, &zy1);
+    {
+        int ex0 = (int)x0 + zx0;
+        int ey0 = (int)y0 + zy0;
+        int ex1 = (int)x0 + zx1;
+        int ey1 = (int)y0 + zy1;
+        if (ex0 < 0) ex0 = 0; if (ey0 < 0) ey0 = 0;
+        if (ex1 < 0) ex1 = 0; if (ey1 < 0) ey1 = 0;
+        ST7789_DrawLine((uint16_t)ex0, (uint16_t)ey0, (uint16_t)ex1, (uint16_t)ey1, COLOR_Z);
+    }
+
+    /* small ticks/markers at the positive ends (optional) */
+    const int tick = 6;
+    /* X positive tick */
+    {
+        int ex = (int)x0 + sx1;
+        int ey = (int)y0 + sy1;
+        if (ex < 0) ex = 0; if (ey < 0) ey = 0;
+        ST7789_DrawLine((uint16_t)(ex - tick), (uint16_t)(ey - tick/2),
+                        (uint16_t)(ex + tick), (uint16_t)(ey + tick/2),
+                        COLOR_X);
+    }
+    /* Y positive tick (top) */
+    {
+        int ex = (int)x0 + yx0;
+        int ey = (int)y0 + yy0;
+        if (ex < 0) ex = 0; if (ey < 0) ey = 0;
+        ST7789_DrawLine((uint16_t)(ex - tick/2), (uint16_t)(ey + tick),
+                        (uint16_t)(ex + tick/2), (uint16_t)(ey - tick),
+                        COLOR_Y);
+    }
+    /* Z positive tick */
+    {
+        int ex = (int)x0 + zx1;
+        int ey = (int)y0 + zy1;
+        if (ex < 0) ex = 0; if (ey < 0) ey = 0;
+        ST7789_DrawLine((uint16_t)(ex - tick), (uint16_t)(ey - tick),
+                        (uint16_t)(ex + tick), (uint16_t)(ey + tick),
+                        COLOR_Z);
+    }
+}
+
+void ST7789_Draw3DVectorThick5(uint16_t x0, uint16_t y0,
+                               float ux, float uy, float uz,
+                               uint16_t color)
+{
+    const float draw_length = 50.0f; /* draw full 50 pixels from center */
+    /* normalize the input vector (defensive even if caller says unit vector) */
+    float vlen = sqrtf(ux*ux + uy*uy + uz*uz);
+    if (vlen <= 1e-6f) {
+        /* Degenerate vector: draw a 5x5 dot centered at x0,y0 */
+        const int half = 2; /* 5 pixels -> offsets -2..+2 */
+        for (int yy = -half; yy <= half; ++yy) {
+            for (int xx = -half; xx <= half; ++xx) {
+                int px = (int)x0 + xx;
+                int py = (int)y0 + yy;
+                if (px < 0) px = 0; if (py < 0) py = 0;
+                ST7789_DrawLine((uint16_t)px, (uint16_t)py, (uint16_t)px, (uint16_t)py, color);
+            }
+        }
+        return;
+    }
+    ux /= vlen; uy /= vlen; uz /= vlen;
+
+    /* compute 3D endpoint = unit_vector * draw_length */
+    float ex3 = ux * draw_length;
+    float ey3 = uy * draw_length;
+    float ez3 = uz * draw_length;
+
+    /* project start (0,0,0) and end to 2D (relative offsets) */
+    int srx, sry, erx, ery;
+    project3D(0.0f, 0.0f, 0.0f, &srx, &sry);
+    project3D(ex3, ey3, ez3, &erx, &ery);
+
+    /* translate to actual screen coords (start should be exactly x0,y0) */
+    int sx = (int)x0 + srx;
+    int sy = (int)y0 + sry;
+    int ex = (int)x0 + erx;
+    int ey = (int)y0 + ery;
+
+    /* If projected 2D line is essentially a point, draw small 5x5 dot */
+    int dx = ex - sx;
+    int dy = ey - sy;
+    float len2d = sqrtf((float)dx*(float)dx + (float)dy*(float)dy);
+    if (len2d <= 0.5f) {
+        const int half = 2;
+        for (int yy = -half; yy <= half; ++yy) {
+            for (int xx = -half; xx <= half; ++xx) {
+                int px = sx + xx;
+                int py = sy + yy;
+                if (px < 0) px = 0; if (py < 0) py = 0;
+                ST7789_DrawLine((uint16_t)px, (uint16_t)py, (uint16_t)px, (uint16_t)py, color);
+            }
+        }
+        return;
+    }
+
+    /* Draw 5 parallel 1-pixel lines offset along the perpendicular (-dy, dx).
+       Offsets are -2..+2 to make total width = 5 pixels. */
+    for (int offset = -2; offset <= 2; ++offset) {
+        /* compute floating shift amount */
+        float shift_fx = (- (float)dy * (float)offset) / len2d;
+        float shift_fy = (  (float)dx * (float)offset) / len2d;
+        int shift_x = fround_to_int(shift_fx);
+        int shift_y = fround_to_int(shift_fy);
+
+        int sx_o = sx + shift_x;
+        int sy_o = sy + shift_y;
+        int ex_o = ex + shift_x;
+        int ey_o = ey + shift_y;
+
+        /* clamp negatives to avoid underflow into uint when casting;
+           if you know screen bounds, clamp to width/height too */
+        if (sx_o < 0) sx_o = 0; if (sy_o < 0) sy_o = 0;
+        if (ex_o < 0) ex_o = 0; if (ey_o < 0) ey_o = 0;
+
+        ST7789_DrawLine((uint16_t)sx_o, (uint16_t)sy_o,
+                        (uint16_t)ex_o, (uint16_t)ey_o,
+                        color);
+    }
+}
+
 void computeTilt(int16_t ax, int16_t ay, int16_t az, Tilt_t *t) {
     if (t == NULL) return;
 
@@ -210,57 +417,85 @@ void Get_Data()
     }
 }
 
-void Move_Ship()
-{
-
-}
 
 void Draw_Data()
 {
     // get depth
-    uint32_t depth = 10;
+//    uint32_t depth = 10;
+//
+//    while (1)
+//    {
+//        if (depth == 10)
+//        {
+//            depth = 20;
+//        }
+//        else if (depth == 20)
+//        {
+//            depth = 30;
+//        }
+//        else if (depth == 30)
+//        {
+//            depth = 10;
+//        }
+//
+//        // print depth
+//        char buffer[20] = {0};
+//
+//        snprintf(buffer, 20, "Depth: %d", depth);
+//
+//        int count = 0;
+//        char c = buffer[0];
+//        G8RTOS_WaitSemaphore(&sem_SPI);
+//        // black box
+//
+//        ST7789_DrawRectangle(30, 45, 150, 20, 0);
+//
+//
+//        // data
+//        while(c != 0)
+//        {
+//            display_setCursor(30 + count*11, 60);
+//            display_setTextColor(0xFFFF);
+//            display_setTextSize(2);
+//            display_print(c);
+//            count += 1;
+//            c = buffer[count];
+//        }
+//        G8RTOS_SignalSemaphore(&sem_SPI);
+//
+//        sleep(1000);
+//    }
 
-    while (1)
+    uint16_t x0 = 50;
+    uint16_t y0 = 100;
+    uint16_t color = ST7789_RED;
+    float prev_ship_fx = ship_state.fx;
+    float prev_ship_fy = ship_state.fy;
+    float prev_ship_fz = ship_state.fz;
+
+    ST7789_Draw3DAxes_C(x0, y0);
+
+    while(1)
     {
-        if (depth == 10)
-        {
-            depth = 20;
-        }
-        else if (depth == 20)
-        {
-            depth = 30;
-        }
-        else if (depth == 30)
-        {
-            depth = 10;
-        }
-
-        // print depth
-        char buffer[20] = {0};
-
-        snprintf(buffer, 20, "Depth: %d", depth);
-
-        int count = 0;
-        char c = buffer[0];
         G8RTOS_WaitSemaphore(&sem_SPI);
-        // black box
 
-        ST7789_DrawRectangle(30, 45, 150, 20, 0);
+        ST7789_Draw3DVectorThick5(x0, y0, prev_ship_fz, (-1.0)*prev_ship_fy, prev_ship_fx, 0x0000);
 
+        ST7789_Draw3DVectorThick5(x0, y0, ship_state.fz, (-1.0)*ship_state.fy, ship_state.fx, color);
 
-        // data
-        while(c != 0)
-        {
-            display_setCursor(30 + count*11, 60);
-            display_setTextColor(0xFFFF);
-            display_setTextSize(2);
-            display_print(c);
-            count += 1;
-            c = buffer[count];
-        }
+        prev_ship_fx = ship_state.fx;
+        prev_ship_fy = ship_state.fy;
+        prev_ship_fz = ship_state.fz;
+
         G8RTOS_SignalSemaphore(&sem_SPI);
 
-        sleep(1000);
+
+        sleep(100);
+
+        G8RTOS_WaitSemaphore(&sem_SPI);
+        ST7789_Draw3DAxes_C(x0, y0);
+        G8RTOS_SignalSemaphore(&sem_SPI);
+        sleep(100);
     }
 }
 
