@@ -1,0 +1,3 @@
+[submodule "Web-UI"]
+	path = Web-UI
+	url = https://github.com/emma-coronado/Swamp-Portal.git
