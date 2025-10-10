@@ -53,6 +53,15 @@ Built by University of Florida team "What Are You Doing In My Swamp?"
 * Houses a Mission Control Core logic that publishes downstream to ROS UUVs
 * Subscribes to ROS UUV-published snapshot
 
+#### AWS GreenGrass
+* Used for component deployment and device partitioning
+* Interfaces well with IPC and MQTT5
+
+#### AWs Elastic Container Registtry
+* Deployment of a 32-bit ROS Image in Docker (for ARM)
+* Integrates seamlessly with EC2 and Greengrass for smooth deployments
+* Allows for a scalable featureset to our solution to add more UUVs to (a) swarm
+
 ## Getting Started
 
 #### Web App UI
