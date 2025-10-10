@@ -1,3 +1,6 @@
 [submodule "Web-UI"]
 	path = Web-UI
 	url = https://github.com/emma-coronado/Swamp-Portal.git
+[submodule "vandy-ros"]
+	path = vandy-ros
+	url = https://github.com/Nikhil-42/vandy-ros.git
