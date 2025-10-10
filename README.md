@@ -47,9 +47,8 @@ Built by University of Florida team "What Are You Doing In My Swamp?"
 #### AWS IoT Rules
 * Straightforward data redirection framework
 * SQL-based digestion engine for data parsing before redirection
-* Forwards to DynamoDB instance
-* Forwards to Webserver via HTTP packet for display
-* Solid error fallback for diagnostics
+* Forwards to DynamoDB instance & to Webserver via HTTP packet for display
+* Solid error fallback to Cloudwatch Event Logs for diagnostics
 
 #### AWS EC2
 * Quick-deploy for AWS server instances
