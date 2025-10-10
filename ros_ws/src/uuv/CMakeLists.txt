@@ -15,7 +15,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(custom_msg REQUIRED)
-find_package(nlohmann_json REQUIRED)
+# find_package(nlohmann_json REQUIRED)
 
 add_executable(uuv_planner src/uuv_planner.cpp)
 target_include_directories(uuv_planner PUBLIC
@@ -33,7 +33,7 @@ ament_target_dependencies(uuv_planner
 )
 
 # Use PLAIN signature (no PRIVATE/INTERFACE) to avoid mixing modes
-target_link_libraries(uuv_planner nlohmann_json::nlohmann_json)
+# target_link_libraries(uuv_planner nlohmann_json::nlohmann_json)
 
 install(TARGETS uuv_planner
   DESTINATION lib/${PROJECT_NAME}

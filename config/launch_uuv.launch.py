@@ -87,7 +87,7 @@ def generate_launch_description():
             {'frame_id': 'relay'},
             {'qos': 1},
             # Uplink (if your bridge supports it)
-            {'ros_input_topic': 'uuv/relay/snapshot_json'},
+            {'ros_input_topic': 'relay/snapshot_json'},
             {'mqtt_topic_pub': 'uuv/relay/snapshot'},
 
         ],

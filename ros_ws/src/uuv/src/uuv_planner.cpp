@@ -51,7 +51,6 @@ struct Waypoint { double t; double x,y,z; };   // t = unix seconds
 using PlanVec = std::vector<Waypoint>;
 
 // Convert between internal PlanVec and custom_msg/Plan
-// NOTE: format unchanged: caller still passes the frame tag they used before ("mid", "relay", etc.)
 static custom_msg::msg::Plan toPlanMsg(const PlanVec& plan, const std::string& frame)
 {
   custom_msg::msg::Plan out;
@@ -165,11 +164,11 @@ public:
     this->declare_parameter<double>("start_epoch",    0.0);
     this->declare_parameter<double>("state_dwell_s",  20.0);
     this->declare_parameter<bool>  ("publish_current_pose", false);
-    this->declare_parameter<int64_t>("Identifier", -1);
+    this->declare_parameter<int64_t>("Identity", -1);
     // Optional: identity numbers aligned with team_ids (stable across role rotation)
     this->declare_parameter<std::vector<int64_t>>("team_identity_numbers", {0,1,2});
 
-    Identifier = this->get_parameter("Identifier").as_int();  // store my stable Identifier number
+    Identity = this->get_parameter("Identity").as_int();  // store my stable identity number
     team_ids_            = this->get_parameter("team_ids").as_string_array();
     leader_id_           = this->get_parameter("leader_id").as_string();
     start_epoch_         = this->get_parameter("start_epoch").as_double();
@@ -215,7 +214,7 @@ public:
     target_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("/" + sub_id_ + "/target_pose", 10);
     if (publish_current_pose_) pose_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("/" + sub_id_ + "/pose", 10);
 
-    // Plan pubs (custom Plan) by ROLE topics (unchanged)
+    // Plan pubs (custom Plan) by ROLE topics (existing contract)
     plans_pub_sub1_ = create_publisher<custom_msg::msg::Plan>("/plans/sub1", 10);
     plans_pub_sub2_ = create_publisher<custom_msg::msg::Plan>("/plans/sub2", 10);
     plans_pub_mid_  = create_publisher<custom_msg::msg::Plan>("/plans/mid",  10);
@@ -305,13 +304,12 @@ public:
       sub_id_.c_str(), team_ids_.size(), leader_id_.c_str(), leader0_idx_, start_epoch_, dwell_s_);
     RCLCPP_INFO(get_logger(),
       "[%s] id=%ld ring=%zu leader0=%s(idx=%d) epoch=%.0f dwell=%.1fs",
-      sub_id_.c_str(), static_cast<long>(Identifier),
+      sub_id_.c_str(), static_cast<long>(Identity),
       team_ids_.size(), leader_id_.c_str(), leader0_idx_, start_epoch_, dwell_s_);
-
   }
 
 private:
-  int64_t Identifier{-1};
+  int64_t Identity{-1};
   std::vector<int64_t> team_identity_numbers_;                 // aligned to team_ids_
   std::unordered_map<std::string,int64_t> idnum_by_teamid_;    // team_id -> identity number
 
@@ -323,7 +321,6 @@ private:
     int slot5;
   };
 
-  // Compute schedule *at arbitrary time* (used for attribution by waypoint time)
   Sched compute(double tunix) const {
     const int N = static_cast<int>(team_ids_.size());
     const double T = 5.0 * dwell_s_;
@@ -354,12 +351,10 @@ private:
     else if (slot5==4) ss=SubState::HOLD_B;
 
     Role r=Role::SUB1;
-    const double tnow = tunix;
     if (sub_id_==mid) r=Role::MID_TIER;
     else if (sub_id_==s1) r=Role::SUB1;
     else if (sub_id_==s2) r=Role::SUB2;
 
-    (void)tnow; // r depends on real-time identity, but attribution uses id_* fields below
     return Sched{r,ms,ss,mid,s1,s2,slot5};
   }
 
@@ -453,7 +448,7 @@ private:
     js << "{"
       << "\"kind\":\"surface_relay_snapshot\","
       << "\"sender\":\"" << sub_id_ << "_node\","
-      << "\"Identifier\":" << Identifier << ","
+      << "\"Identity\":" << Identity << ","
       << "\"role\":\"MID_TIER\","
       << "\"cycle\":{"
       <<   "\"epoch\":" << std::fixed << start_epoch_ << ","
@@ -582,7 +577,7 @@ private:
     }
   }
 
-  // MID: one-shot handoff publisher in the slot (format unchanged)
+  // MID: one-shot handoff publisher in the slot
   void midHandoffOnce(const std::string& role_key, const std::string& recipient_id){
     if (published_this_slot_) return;
     published_this_slot_ = true;
@@ -605,22 +600,7 @@ private:
     known_mid_prev_ = known_mid_;
   }
 
-  // Split a plan by identity based on each waypoint's timestamp and the role topic it arrived on.
-  // This preserves on-wire format but yields identity-accurate history.
-  std::unordered_map<int64_t, PlanVec>
-  splitByIdentityFromRole(const PlanVec& p, const std::string& role_key) const {
-    std::unordered_map<int64_t, PlanVec> out;
-    for (const auto& w : p){
-      const auto sch_w = compute(w.t); // role holders at this waypoint time
-      std::string team_id_holder =
-        (role_key=="mid") ? sch_w.id_mid : (role_key=="sub1" ? sch_w.id_s1 : sch_w.id_s2);
-      int64_t idn = identityOfTeamId(team_id_holder);
-      if (idn >= 0) out[idn].push_back(w);
-    }
-    return out;
-  }
-
-  // ROLE-topic plan reception → merge role knowledge AND per-identity store (by waypoint time)
+  // ROLE-topic plan reception → merge into role knowledge AND per-identity store
   void onPlanTopic(const custom_msg::msg::Plan& pm, const std::string& topic_key /* "sub1"|"sub2"|"mid" */) {
     const std::string my_key = roleKeyNow();
     PlanVec new_plan = fromPlanMsg(pm);
@@ -631,11 +611,13 @@ private:
     else if (topic_key=="sub2") added = mergeIntoCount(known_sub2_, new_plan), added_since_surface_sub2_ += added;
     else                        added = mergeIntoCount(known_mid_,  new_plan), added_since_surface_mid_  += added;
 
-    // Also merge into the PER-IDENTITY store using per-waypoint attribution
-    auto chunks = splitByIdentityFromRole(new_plan, topic_key);
-    for (auto& kv : chunks){
-      auto& vec = per_identity_plans_[kv.first]; // creates if missing
-      mergeIntoCount(vec, kv.second);
+    // Also merge into the PER-IDENTITY store for *whoever currently holds that role*
+    const auto sch = compute(now_unix());
+    std::string team_id_holder = (topic_key=="mid")? sch.id_mid : (topic_key=="sub1"? sch.id_s1 : sch.id_s2);
+    int64_t idnum = identityOfTeamId(team_id_holder);
+    if (idnum >= 0){
+      mergeIntoCount(per_identity_plans_[idnum], new_plan);
+      // keep the per-identity history == merged plans (we sanitize when serializing)
     }
 
     // If this plan is for me-in-my-current-role, do echo bookkeeping
@@ -688,19 +670,22 @@ private:
 
     const auto sch = compute(now_unix());
 
+    // Build per-identity sanitized copies (history == plans)
     // Ensure we have entries for all team members
     for (const auto& team_id : team_ids_){
       int64_t idn = identityOfTeamId(team_id);
       (void) per_identity_plans_[idn]; // ensure default-created
     }
 
-    // Create sanitized copies, and (optionally) cap extreme jumps
+    // Create sanitized copies and (optionally) cap extreme jumps
     std::unordered_map<int64_t, PlanVec> plans_sanitized;
+    std::unordered_map<int64_t, PlanVec> history_sanitized;
     for (const auto& team_id : team_ids_){
       const int64_t idn = identityOfTeamId(team_id);
       PlanVec cp = per_identity_plans_[idn];     // copy
       sanitizePlanHistory(cp, 30.0);
-      plans_sanitized[idn]   = cp;               // history == plans
+      plans_sanitized[idn]   = cp;
+      history_sanitized[idn] = cp;               // history == plans
     }
 
     // Also still provide the role-based arrays for backward compatibility
@@ -709,12 +694,12 @@ private:
     sanitizePlanHistory(k_s1,  30.0);
     sanitizePlanHistory(k_s2,  30.0);
 
-    // Build JSON — FORMAT UNCHANGED vs your last version
+    // Build JSON
     std::ostringstream js;
     js << "{"
        << "\"kind\":\"surface_relay_snapshot\","
        << "\"sender\":\"" << sub_id_ << "_node\","
-       << "\"Identifier\":" << Identifier << ","
+       << "\"Identity\":" << Identity << ","
        << "\"role\":\"MID_TIER\","
        << "\"cycle\":{"
        <<   "\"epoch\":" << std::fixed << start_epoch_ << ","
@@ -743,11 +728,12 @@ private:
       const int64_t idn = team_identity_numbers_[i];
       const std::string role_now = roleOfTeamId(team_id, sch);
       const PlanVec& p  = plans_sanitized[idn];
+      const PlanVec& h  = history_sanitized[idn];
       js << "\"" << idn << "\":{"
          <<   "\"team_id\":\"" << team_id << "\","
          <<   "\"role_now\":\"" << role_now << "\","
          <<   "\"plan\":"    << planToJsonArray(p) << ","
-         <<   "\"history\":" << planToJsonArray(p) << "}";
+         <<   "\"history\":" << planToJsonArray(h) << "}";
       if (i + 1 < team_ids_.size()) js << ",";
     }
     js << "},"
