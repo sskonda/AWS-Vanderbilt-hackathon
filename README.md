@@ -1,4 +1,59 @@
+<table>
+  <tr>
+    <!-- Team logo (left) -->
+    <td>
+      <img src="docs/assets/team_branding/TeamLogoNoBackground.png" alt="Team Logo" height="100">
+    </td>
+    <!-- AWS logos (right) -->
+    <td>
+      <img src="docs/assets/aws/DynamoDB.png" alt="DynamoDB" height="60">
+      <img src="docs/assets/aws/App Runner.png" alt="App Runner" height="60">
+      <img src="docs/assets/aws/Elastic Container Registry.png" alt="Elastic Container Registry" height="60">
+      <img src="docs/assets/aws/IoT Core.png" alt="IoT Core" height="60">
+      <img src="docs/assets/aws/IoT Greengrass.png" alt="IoT Greengrass" height="60">
+      <img src="docs/assets/aws/S3 on Outposts.png" alt="S3 on Outposts" height="60">
+      <br>
+      <img src="docs/assets/aws/PoweredByAWS.png" alt="Powered by AWS" height="40">
+    </td>
+  </tr>
+</table>
+
 # Operation Duloc
+Built by University of Florida team "What Are You Doing In My Swamp?"
+
+## Project Overview
+
+### Built with:
+
+### Technologies used:
+* Arduino ESP32 BLE library
+* TI TivaWare peripheral drivers
+* Custom **G8RTOS** kernel (scheduling, semaphores, threads, UART/SPI drivers)
+
+### Architecture
+
+## AWS DynamoDB
+* Scalable and relatively easy-to-use database system
+* Integrates easily with other AWS services
+* Free-form NoSQL format for on-the-fly data format changes
+
+## AWS IoT Core
+* Come standard with MQTT publish/subscribe model
+* Allow for a centralized staging area for devices
+
+## AWS IoT Rules
+* Straightforward data redirection framework
+* SQL-based digestion engine for data parsing before redirection
+* Forwards to DynamoDB instance
+* Forwards to Webserver via HTTP packet for display
+* Solid error fallback for diagnostics
+
+## Getting Started
+
+#### Web App UI
+See [Swamp Portal README](https://github.com/emma-coronado/Swamp-Portal?tab=readme-ov-file#quick-start)
+
+### Installation Instructions
 
 ## Branches
 ### BLE → Tiva Simulation (Submarine Swarm Branch)**
@@ -331,3 +386,20 @@ When reusing or publishing derivative work, please preserve authorship and attri
 > “The BLE packets are just placeholders — when the optical transceivers arrive, the code will already know how to see.”
 
 ---
+
+## License
+
+This project was developed as part of the **Vanderbilt Hackathon submarine swarm project**.
+
+See `LICENSE` file for license information.
+
+## ⭐ Acknowledgments 
+**Special thanks to the following teams for joining our collaborative dashboard vision:**
+* AutoGators
+* Aardvark
+* Goblin Gang
+* Jet2Holiday
+* Clankers
+* The Hivemind
+* Prober
+* One
