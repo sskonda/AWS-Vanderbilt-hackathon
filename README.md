@@ -32,6 +32,21 @@ Built by University of Florida team "What Are You Doing In My Swamp?"
 
 ### Architecture
 
+## AWS DynamoDB
+* Scalable and relatively easy-to-use database system
+* Integrates easily with other AWS services
+* Free-form NoSQL format for on-the-fly data format changes
+
+## AWS IoT Core
+* Come standard with MQTT publish/subscribe model
+* Allow for a centralized staging area for devices
+
+## AWS IoT Rules
+* Straightforward data redirection framework
+* SQL-based digestion engine for data parsing before redirection
+* Forwards to DynamoDB instance
+* Forwards to Webserver via HTTP packet for display
+* Solid error fallback for diagnostics
 
 ## Getting Started
 
