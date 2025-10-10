@@ -47,6 +47,15 @@ Built by University of Florida team "What Are You Doing In My Swamp?"
 4. Connect ESP32 TX (GPIO 17 by default) to the Tiva UART RX.
 5. Ensure all grounds (ESP32 + Tiva + LCD) share a common ground.
 
+#### Web App UI
+See [Swamp Portal README](https://github.com/emma-coronado/Swamp-Portal?tab=readme-ov-file#quick-start)
+
+## License
+
+This project was developed as part of the **Vanderbilt Hackathon submarine swarm project**.
+
+See `LICENSE` file for license information.
+
 ## ⭐ Acknowledgments 
 **Special thanks to the following teams for joining our collaborative dashboard vision:**
 * AutoGators
@@ -57,9 +66,3 @@ Built by University of Florida team "What Are You Doing In My Swamp?"
 * The Hivemind
 * Prober
 * One
-
-## License
-
-This project was developed as part of the **Vanderbilt Hackathon submarine swarm project**.
-
-See `LICENSE` file for license information.
