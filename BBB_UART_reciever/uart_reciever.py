@@ -84,7 +84,7 @@ def uart_receiver(port="/dev/ttyS4", baudrate=115200):
     if not os.path.exists(port):
         print(f"[ERROR] UART device '{port}' not found!")
         print("--------------------------------------------------")
-        print("👉 To enable UART4 on BeagleBone Black:")
+        print("  To enable UART4 on BeagleBone Black:")
         print("   1. Edit /boot/uEnv.txt and ensure these lines exist:")
         print("        enable_uboot_overlays=1")
         print("        uboot_overlay_addr4=/lib/firmware/BB-UART4-00A0.dtbo")
