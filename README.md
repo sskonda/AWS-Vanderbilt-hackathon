@@ -29,6 +29,8 @@ Built by University of Florida team "What Are You Doing In My Swamp?"
 * Arduino ESP32 BLE library
 * TI TivaWare peripheral drivers
 * Custom **G8RTOS** kernel (scheduling, semaphores, threads, UART/SPI drivers)
+* ROS2 Humble for UUV Control and interfacing with MQTT
+* AWS Cloud Services not limited to IoT Core, EC2, etc.
 
 ### Architecture
 
