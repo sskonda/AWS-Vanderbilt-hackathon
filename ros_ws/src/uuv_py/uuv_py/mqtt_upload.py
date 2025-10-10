@@ -59,6 +59,8 @@ class mqtt_upload(Node):
             ('client_id',       f'subA'),
             ('frame_id',        'relay'),
             # AWS topics
+            ('mqtt2ros', []),
+            ('ros2mqtt', []),
             ('mqtt_topic_sub',  'uuv/relay/downlink'),  # AWS -> ROS
             ('mqtt_topic_pub',  'uuv/relay/snapshot'),  # ROS -> AWS
             ('qos',             1),

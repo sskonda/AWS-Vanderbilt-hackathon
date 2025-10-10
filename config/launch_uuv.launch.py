@@ -1,3 +1,50 @@
+# # launch_uuv_bridge.launch.py
+# from launch import LaunchDescription
+# from launch_ros.actions import Node
+# import os
+
+# def generate_launch_description():
+#     os.environ.setdefault("FASTDDS_SHM_TRANSPORT_DISABLE", "1")
+
+#     uuv = Node(
+#         package='uuv',
+#         executable='uuv_planner',
+#         name='uuv_planner',
+#         output='screen',
+#         parameters=[
+#             {'sub_id': 'subMID'},
+#             {'team_ids': ['subMID','subA','subB']},
+#             {'leader_id': 'subMID'},
+#             {'state_dwell_s': 20.0},
+#             {'publish_current_pose': False},
+#         ],
+#     )
+
+#     bridge = Node( # both download and upload
+#         package='uuv_py',
+#         executable='mqtt_upload',  
+#         name='mqtt_upload',
+#         output='screen',
+#         parameters=[
+#             # AWS IoT connection
+#             {'endpoint':        'a2z539demks74-ats.iot.us-east-1.amazonaws.com'},
+#             {'cert_filepath':   '/home/katherine/Code/aws-hackathon/AWS-Vanderbilt-hackathon/aws_iot_core/subA.cert.pem'},
+#             {'pri_key_filepath':'/home/katherine/Code/aws-hackathon/AWS-Vanderbilt-hackathon/aws_iot_core/subA.private.key'},
+#             {'ca_filepath':     '/home/katherine/Code/aws-hackathon/AWS-Vanderbilt-hackathon/aws_iot_core/root-CA.crt'},
+#             {'client_id': 'subA'},
+
+#             {'ros_input_topic': '/relay/snapshot_json'},  # planner publishes JSON String here
+#             {'mqtt_topic_pub':  'uuv/relay/snapshot'},    # bridge publishes to AWS here
+#             {'mqtt_topic_sub':  'uuv/relay/downlink'},    # bridge subscribes from AWS here
+
+#             {'frame_id': 'relay'},
+#             {'qos': 1},  # 1 = At least once
+#         ],
+#     )
+
+#     return LaunchDescription([uuv, bridge])
+
+# launch_uuv.launch.py
 from launch import LaunchDescription
 from launch_ros.actions import Node
 
@@ -40,8 +87,9 @@ def generate_launch_description():
             {'frame_id': 'relay'},
             {'qos': 1},
             # Uplink (if your bridge supports it)
-            {'ros_input_topic': '/relay/snapshot_json'},
+            {'ros_input_topic': 'uuv/relay/snapshot_json'},
             {'mqtt_topic_pub': 'uuv/relay/snapshot'},
+
         ],
     )
 
