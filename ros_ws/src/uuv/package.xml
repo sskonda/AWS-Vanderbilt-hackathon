@@ -6,6 +6,10 @@
   <description>Runs a single UUV in Gazebo (cannot communicate without close proximity)</description>
   <maintainer email="iyer.h.nikhil@gmail.com">Nikhil Iyer</maintainer>
   <license>MIT</license>
+  
+  <depend>rclcpp</depend>
+  <depend>geometry_msgs</depend>
+  <depend>custom_msg</depend>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
