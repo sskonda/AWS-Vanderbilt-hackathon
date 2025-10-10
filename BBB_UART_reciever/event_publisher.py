@@ -13,8 +13,8 @@ from std_msgs.msg import Header
 class SubmarineEventPublisher(Node):
 
     def __init__(self):
-        super().__init("Submarine_Event_Publisher")
-        self.publisher_ = self.create_publisher(Event, 'events', 10)
+        super().__init("SubmarineEventPublisher")
+        self.publisher_ = self.create_publisher(Event, '/events/command', 10)
         while (1):
             val = self.uart_receiver(port="/dev/ttyS1", baudrate=115200)
 
