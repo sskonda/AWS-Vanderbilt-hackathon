@@ -363,14 +363,208 @@ This cycle repeats continuously, ensuring smooth LCD updates and responsive UART
 
 ---
 
-# Next steps / recommended improvements
+# Threads.c additions: IMU processing, position tracking, and ROS telemetry
 
-* Add a **heartbeat message** from each ESP when at least one connection is active, so the Tiva can detect total silence or timeouts.
-* Add timestamps or sequence numbers to the UART messages for debug traceability.
-* Expand the LCD UI to three submarines (currently two visible).
-* Replace BLE simulation with the **real optical transceiver hardware** once available, reusing the same UART framing.
-* Integrate depth, heading, and other telemetry into the same RTOS display pipeline.
-* Optionally, log connection history to SD card or host PC for testing swarm formation logic.
+This section documents the new logic added in `final_threads.c` that fuses BMI160 IMU data with joystick input to estimate orientation and position, renders those results on the ST7789 LCD, and streams compact telemetry frames to the BeagleBone Black for ROS ingestion.
+
+## Threads overview and responsibilities
+
+The following threads and ISRs run under G8RTOS on the Tiva:
+
+* `Get_Data()`
+
+  * Reads BMI160 over I2C
+  * Computes tilt and a normalized direction vector `(fx, fy, fz)`
+  * Reads joystick Y from FIFO 1, computes thrust, updates `ship_state` position `px, py, pz`
+  * Uses `sem_I2C` while accessing BMI160 and `sem_UART` for debug prints
+* `Draw_Data()`
+
+  * Renders 3D axes and a thick direction vector on the ST7789 LCD
+  * Uses `sem_SPI` to guard LCD SPI access
+  * Refreshes the direction vector periodically (about 5 Hz based on sleeps)
+* `Draw_Position()`
+
+  * Renders `px, py, pz` as text boxes on the LCD
+  * Uses `sem_SPI` to guard LCD SPI access
+* `Draw_Subs()`
+
+  * Draws two submarine glyphs and overlays a red X when a sub is lost
+  * Uses `sem_SPI`
+  * Reacts to `current_state_sub_1` and `current_state_sub_2`
+* `Read_ESP32()`
+
+  * Consumes single ASCII bytes from the ESP32 BLE bridge
+  * Updates submarine states
+  * Forwards concise proximity events to the BeagleBone over UART4 as ASCII frames
+  * Uses `sem_UART4` for UART4 output and `sem_UART` for console prints
+* `Send_PO_Data()`
+
+  * Periodically sends Position and Orientation frames to the BeagleBone over UART4
+  * Uses `sem_UART4`
+* `BeagleBone_Do()`
+
+  * Consumes 8 byte records placed into FIFO 0 by the UART4 ISR
+  * Parses and prints the record and can trigger state changes or processing
+  * Uses `sem_UART` for console prints
+* `Get_Joystick()` (periodic at 10 Hz)
+
+  * Samples joystick via `JOYSTICK_GetXY()`
+  * Writes the raw 12 bit packed XY sample to FIFO 1
+* `Read_Buttons()` (aperiodic)
+
+  * Debounces and reports button presses
+  * Uses `sem_GPIOE` to synchronize with the GPIOE ISR
+* `Idle_Thread()`
+
+  * Background no op
+* `UART4_Handler()` (aperiodic ISR)
+
+  * Reads all pending bytes from UART4
+  * Packs first 8 bytes into two 32 bit words and writes them to FIFO 0
+* `GPIOE_Handler()` (aperiodic ISR)
+
+  * Signals `sem_GPIOE` for `Read_Buttons()`
+
+## IMU acquisition and tilt computation
+
+BMI160 acceleration is read over I2C in `Get_Data()`:
+
+* I2C access is protected by `sem_I2C`.
+* Raw accelerations are normalized by gravity and converted into two tilt angles.
+* Helper function:
+
+  ```c
+  void computeTilt(int16_t ax, int16_t ay, int16_t az, Tilt_t *t);
+  ```
+
+  This computes
+
+  * `t->forward = atan2f(y, sqrtf(x*x + z*z))` normalized to about [-1, 1]
+  * `t->side = atan2f(x, sqrtf(y*y + z*z))` normalized to about [-1, 1]
+
+From these tilts, the code maintains a unit direction vector `(fx, fy, fz)` in `ship_state`. That vector is used by rendering and by the telemetry path.
+
+## Position update with joystick thrust
+
+* `Get_Joystick()` runs as a periodic event at 10 Hz and writes the current joystick reading to FIFO 1.
+* `Get_Data()` reads FIFO 1, extracts the Y channel, maps it to [-1, 1], applies a deadband, and computes thrust magnitude.
+* `updateShipPosition(&ship_state, tilt_data)` advances `px, py, pz` using the current thrust and direction vector.
+
+## LCD visualization under SPI semaphore
+
+All LCD drawing uses the ST7789 driver under `sem_SPI`:
+
+* `Draw_Data()` shows a 3D axes widget plus a thick line representing the unit direction vector. It erases the previous vector and draws the new one. The sequence uses two short sleeps to manage refresh cadence and reduce flicker.
+* `Draw_Position()` prints `X`, `Y`, and `Z` in three text boxes and updates them once per second.
+* `Draw_Subs()` renders two submarine glyphs and overlays a red X when a peer is lost. The drawing of each pixel is wrapped by `G8RTOS_WaitSemaphore(&sem_SPI)` and `G8RTOS_SignalSemaphore(&sem_SPI)` blocks.
+
+## Proximity event relay to BeagleBone over UART4
+
+`Read_ESP32()` converts incoming single byte proximity events from the ESP32 into short ASCII frames on UART4 for the BeagleBone. The exact mapping depends on which submarine the firmware is compiled for using one of the compile time macros `SUB_0`, `SUB_1`, or `SUB_2`.
+
+Frames:
+
+* `E0F\n` means ESP0 found
+* `E1F\n` means ESP1 found
+* `E2F\n` means ESP2 found
+* `E0L\n` means ESP0 lost
+* `E1L\n` means ESP1 lost
+* `E2L\n` means ESP2 lost
+
+Examples of mapping inside `Read_ESP32()`:
+
+* If compiled with `SUB_0`
+
+  * Incoming `'1'` sets Sub 1 connected and sends `E1F\n`
+  * Incoming `'2'` sets Sub 2 connected and sends `E2F\n`
+  * Incoming `'B'` sets Sub 1 lost and sends `E1L\n`
+  * Incoming `'C'` sets Sub 2 lost and sends `E2L\n`
+
+* If compiled with `SUB_1`
+
+  * Incoming `'0'` sets Sub 1 connected and sends `E0F\n`
+  * Incoming `'2'` sets Sub 2 connected and sends `E2F\n`
+  * Incoming `'A'` sets Sub 1 lost and sends `E0L\n`
+  * Incoming `'C'` sets Sub 2 lost and sends `E2L\n`
+
+* If compiled with `SUB_2`
+
+  * Incoming `'0'` sets Sub 1 connected and sends `E0F\n`
+  * Incoming `'1'` sets Sub 2 connected and sends `E1F\n`
+  * Incoming `'A'` sets Sub 1 lost and sends `E0L\n`
+  * Incoming `'B'` sets Sub 2 lost and sends `E1L\n`
+
+All UART4 writes in this thread are protected by `sem_UART4`.
+
+## Pose telemetry frames for ROS bridge
+
+`Send_PO_Data()` sends compact ASCII frames to the BeagleBone over UART4, which are then parsed and published to ROS:
+
+* Position frame
+
+  ```
+  P,<px>,<py>,<pz>\n
+  ```
+
+  Example
+
+  ```
+  P,12,5,3
+  ```
+
+* Orientation frame
+
+  ```
+  O,<fx>,<fy>,<fz>\n
+  ```
+
+  Example
+
+  ```
+  O,0.23,-0.45,0.81
+  ```
+
+The BeagleBone parses these lines and maps them to ROS topics such as `/sub/position` and `/sub/orientation`.
+
+## FIFO usage
+
+Two FIFOs are used for decoupled, ISR safe data transport:
+
+* FIFO 0
+
+  * Producer: `UART4_Handler()` ISR packs up to 8 received bytes into two 32 bit words and writes both words to FIFO 0
+  * Consumer: `BeagleBone_Do()` reads both words, reconstructs the 8 byte record, and handles it
+
+* FIFO 1
+
+  * Producer: `Get_Joystick()` periodic thread writes joystick reading
+  * Consumer: `Get_Data()` reads the most recent joystick value when updating thrust
+
+## Semaphores used
+
+* `sem_SPI` protects ST7789 LCD SPI access for `Draw_Data`, `Draw_Position`, `Draw_Subs`
+* `sem_I2C` protects BMI160 I2C access in `Get_Data`
+* `sem_UART` protects console UART prints in multiple threads
+* `sem_UART4` serializes telemetry writes to BeagleBone in `Read_ESP32` and `Send_PO_Data`
+* `sem_GPIOE` synchronizes the button ISR and the `Read_Buttons` thread
+
+## Aperiodic and periodic events
+
+* Aperiodic events
+
+  * `UART4_Handler()` processes inbound UART4 bytes and fills FIFO 0
+  * `GPIOE_Handler()` signals button events
+* Periodic events
+
+  * `Get_Joystick()` runs at 10 Hz to provide consistent operator input sampling
+
+## Display cadence and timing notes
+
+* `Draw_Data()` alternates vector erase and redraw with two 100 ms sleeps, for an effective update around 5 Hz
+* `Draw_Position()` updates once per second
+* `Draw_Subs()` updates immediately when state variables change, then sleeps briefly to yield
+
+These timings balance visual responsiveness with CPU and SPI bandwidth while leaving headroom for UART and ISR work.
 
 ---
 
