@@ -1,40 +1,50 @@
 #include <rclcpp/rclcpp.hpp>
-#include <ros_ign_interfaces/msg/entity.hpp>
+#include <tf2_msgs/msg/tf_message.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
 
-// class SubmarinePoseFilter : public rclcpp::Node
-// {
-// public:
-//   SubmarinePoseFilter()
-//   : Node("submarine_pose_filter")
-//   {
-//     sub_ = this->create_subscription<ros_ign_interfaces::msg::EntityPose>(
-//       "/world/buoyancy/pose/info", 10,
-//       std::bind(&SubmarinePoseFilter::pose_callback, this, std::placeholders::_1));
-//   }
+class SubmarinePoseFilter : public rclcpp::Node
+{
+public:
+  SubmarinePoseFilter()
+  : Node("submarine_pose_filter")
+  {
+    sub_ = this->create_subscription<tf2_msgs::msg::TFMessage>(
+      "/world/buoyancy/dynamic_pose/info", 10,
+      std::bind(&SubmarinePoseFilter::pose_callback, this, std::placeholders::_1)
+    );
+    
+    pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>(
+      "/submarines/pose", 10);
+  }
 
-// private:
-//   void pose_callback(const ros_ign_interfaces::msg::EntityPose::SharedPtr msg)
-//   {
-//     for (size_t i = 0; i < msg->name.size(); ++i)
-//     {
-//       if (msg->name[i] == "submarine")
-//       {
-//         const auto & pose = msg->pose[i];
-//         RCLCPP_INFO(this->get_logger(),
-//           "Submarine pose: position=(%.2f, %.2f, %.2f) orientation=(%.2f, %.2f, %.2f, %.2f)",
-//           pose.position.x, pose.position.y, pose.position.z,
-//           pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w);
-//       }
-//     }
-//   }
+private:
+  void pose_callback(const tf2_msgs::msg::TFMessage::SharedPtr msg)
+  {
+    geometry_msgs::msg::PoseStamped filtered_msg;
+    for (const auto & transform : msg->transforms) {
+      // Log message
+      std::string name = transform.child_frame_id;
+      if (name.substr(0, 3) == "sub") {
+        filtered_msg.header = transform.header;
+        filtered_msg.header.frame_id = transform.child_frame_id;
+        filtered_msg.pose.position.x = transform.transform.translation.x;
+        filtered_msg.pose.position.y = transform.transform.translation.y;
+        filtered_msg.pose.position.z = transform.transform.translation.z;
+        filtered_msg.pose.orientation = transform.transform.rotation;
 
-//   rclcpp::Subscription<ros_ign_interfaces::msg::EntityPose>::SharedPtr sub_;
-// };
+        pub_->publish(filtered_msg);
+      }
+    }
+  }
+
+  std::shared_ptr<rclcpp::Subscription<tf2_msgs::msg::TFMessage>> sub_;
+  std::shared_ptr<rclcpp::Publisher<geometry_msgs::msg::PoseStamped>> pub_;
+};
 
 int main(int argc, char ** argv)
 {
-  // rclcpp::init(argc, argv);
-  // rclcpp::spin(std::make_shared<SubmarinePoseFilter>());
-  // rclcpp::shutdown();
+  rclcpp::init(argc, argv);
+  rclcpp::spin(std::make_shared<SubmarinePoseFilter>());
+  rclcpp::shutdown();
   return 0;
 }
