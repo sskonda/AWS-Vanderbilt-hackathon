@@ -1,5 +1,11 @@
+# - ros_topic_name: /world/buoyancy/dynamic_pose/info
+#   ros_type_name: tf2_msgs/msg/TFMessage
+#   gz_topic_name: /world/buoyancy/dynamic_pose/info
+#   gz_type_name: ignition.msgs.Pose_V
+#   direction: IGN_TO_ROS
+# config/ros_gz_bridge.yaml
 - ros_topic_name: /world/buoyancy/dynamic_pose/info
-  ros_type_name: tf2_msgs/msg/TFMessage
-  gz_topic_name: /world/buoyancy/dynamic_pose/info
   gz_type_name: ignition.msgs.Pose_V
-  direction: IGN_TO_ROS
+  ros_type_name: tf2_msgs/msg/TFMessage
+  direction: GZ_TO_ROS
+

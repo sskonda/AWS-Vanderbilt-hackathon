@@ -25,6 +25,7 @@ setup(
     entry_points={
         'console_scripts': [
             'mqtt_dump = uuv_py.mqtt_dump:main',
+            'mqtt_upload = uuv_py.mqtt_upload:main',
         ],
     },
 )

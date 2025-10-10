@@ -7,7 +7,7 @@ mqtt_client:
       # pass:              # password used for authenticating to the broker
       tls:
         enabled: true          # [false] whether to connect via SSL/TLS
-        ca_certificate: /home/kapow/Development/AWS-Vanderbilt-hackathon/aws_iot_core/root-CA.crt   # [/etc/ssl/certs/ca-certificates.crt] CA certificate file trusted by client (relative to ROS_HOME)
+        ca_certificate: /home/katherine/Code/aws-hackathon/AWS-Vanderbilt-hackathon/aws_iot_core/root-CA.crt   # [/etc/ssl/certs/ca-certificates.crt] CA certificate file trusted by client (relative to ROS_HOME)
     client:
       id: Nikhil-LAPTOP # unique ID string used to identify the client (broker may allow empty ID and automatically generate one)
       # buffer:
@@ -22,8 +22,8 @@ mqtt_client:
       # keep_alive_interval:  # [60.0] keep-alive interval in seconds
       # max_inflight:         # [65535] maximum number of inflight messages
       tls:
-        certificate: /home/kapow/Development/AWS-Vanderbilt-hackathon/aws_iot_core/Nikhil-LAPTOP.cert.pem         #  client certificate file (only needed if broker requires client certificates; relative to ROS_HOME)
-        key: /home/kapow/Development/AWS-Vanderbilt-hackathon/aws_iot_core/Nikhil-LAPTOP.private.key                  # client private key file (relative to ROS_HOME)
+        certificate: /home/katherine/Code/aws-hackathon/AWS-Vanderbilt-hackathon/aws_iot_core/Nikhil-LAPTOP.cert.pem         #  client certificate file (only needed if broker requires client certificates; relative to ROS_HOME)
+        key: /home/katherine/Code/aws-hackathon/AWS-Vanderbilt-hackathon/aws_iot_core/Nikhil-LAPTOP.public.key                 # client private key file (relative to ROS_HOME)
         # password:             # client private key password
         # version:              # TLS version (https://github.com/eclipse/paho.mqtt.cpp/blob/master/src/mqtt/ssl_options.h#L305)
         # verify:               # verify the client should conduct post-connect checks.
