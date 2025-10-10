@@ -31,6 +31,7 @@ Built by University of Florida team "What Are You Doing In My Swamp?"
 * Custom **G8RTOS** kernel (scheduling, semaphores, threads, UART/SPI drivers)
 * ROS2 Humble for UUV Control and interfacing with MQTT
 * AWS Cloud Services not limited to IoT Core, EC2, etc.
+* Spring and AngularJS for frontend
 
 ### Architecture
 
@@ -63,6 +64,13 @@ Built by University of Florida team "What Are You Doing In My Swamp?"
 * Deployment of a 32-bit ROS Image in Docker (for ARM)
 * Integrates seamlessly with EC2 and Greengrass for smooth deployments
 * Allows for a scalable featureset to our solution to add more UUVs to (a) swarm
+* Also utilized for automatic frontend deployment and build lifetime
+
+#### AWS App Runner
+* Fully managed service that deploys app containers on update
+* Automatic scaling for larger and larger webserver feature additions
+* Pulls containers from Elastic-Container Registry to build for deployment
+* Uses Githuub action to pull from main repo to source docker containers  
 
 ## Getting Started
 
