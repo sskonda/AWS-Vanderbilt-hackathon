@@ -23,12 +23,18 @@ Built by University of Florida team "What Are You Doing In My Swamp?"
 
 ## Project Overview
 
+### [Web App UI Github + README](https://github.com/emma-coronado/Swamp-Portal?tab=readme-ov-file#quick-start)
+
+
 ### Built with:
 
 ### Technologies used:
 * Arduino ESP32 BLE library
 * TI TivaWare peripheral drivers
 * Custom **G8RTOS** kernel (scheduling, semaphores, threads, UART/SPI drivers)
+* ROS2 Humble for UUV Control and interfacing with MQTT
+* AWS Cloud Services not limited to IoT Core, EC2, etc.
+* Spring and AngularJS for frontend
 
 ### Architecture
 
@@ -44,14 +50,29 @@ Built by University of Florida team "What Are You Doing In My Swamp?"
 #### AWS IoT Rules
 * Straightforward data redirection framework
 * SQL-based digestion engine for data parsing before redirection
-* Forwards to DynamoDB instance
-* Forwards to Webserver via HTTP packet for display
-* Solid error fallback for diagnostics
+* Forwards to DynamoDB instance & to Webserver via HTTP packet for display
+* Solid error fallback to Cloudwatch Event Logs for diagnostics
 
 #### AWS EC2
 * Quick-deploy for AWS server instances
 * Houses a Mission Control Core logic that publishes downstream to ROS UUVs
 * Subscribes to ROS UUV-published snapshot
+
+#### AWS GreenGrass
+* Used for component deployment and device partitioning
+* Interfaces well with IPC and MQTT5
+
+#### AWs Elastic Container Registtry
+* Deployment of a 32-bit ROS Image in Docker (for ARM)
+* Integrates seamlessly with EC2 and Greengrass for smooth deployments
+* Allows for a scalable featureset to our solution to add more UUVs to (a) swarm
+* Also utilized for automatic frontend deployment and build lifetime
+
+#### AWS App Runner
+* Fully managed service that deploys app containers on update
+* Automatic scaling for larger and larger webserver feature additions
+* Pulls containers from Elastic-Container Registry to build for deployment
+* Uses Githuub action to pull from main repo to source docker containers  
 
 ## Getting Started
 
@@ -566,6 +587,183 @@ Two FIFOs are used for decoupled, ISR safe data transport:
 
 These timings balance visual responsiveness with CPU and SPI bandwidth while leaving headroom for UART and ISR work.
 
+## ⚙️ Control Signals, Topics, and Code Deep-Dive
+
+This section documents the ROS 2 interfaces and the inner workings of the `SubNode` shown below, including role/state rotation, plan exchange, event flow, and the JSON snapshots published for your IoT bridge.
+
+---
+
+### 🛰 ROS 2 Topic Map (by role namespace)
+
+> Each node publishes/consumes *role-scoped* topics to keep a stable interface even as roles rotate among `team_ids`.
+
+| Topic | Type | Pub | Sub | Purpose / Notes |
+|---|---|---|---|---|
+| `/<sub_id>/target_pose` | `geometry_msgs/PoseStamped` | Self | — | Per-tick target waypoint based on current role/state. Can double as pose if `publish_current_pose=true`. |
+| `/<sub_id>/pose` | `geometry_msgs/PoseStamped` | Self | — | Optional mirror of `target_pose` as “current pose” for quick testing/sim. |
+| `/plans/sub1` | `custom_msg/Plan` | Any | All | Role topic: the plan for whoever currently holds role **SUB1**. |
+| `/plans/sub2` | `custom_msg/Plan` | Any | All | Role topic: plan for **SUB2**. |
+| `/plans/mid`  | `custom_msg/Plan` | Any | All | Role topic: plan for **MID_TIER**. |
+| `/echo/sub1`  | `custom_msg/Plan` | Any | All | “Previous plan” echo channel for SUB1 holder (diagnostics/redundancy). |
+| `/echo/sub2`  | `custom_msg/Plan` | Any | All | Same for SUB2. |
+| `/echo/mid`   | `custom_msg/Plan` | Any | All | Same for MID. |
+| `/relay/sub1` | `custom_msg/Plan` | MID | All | MID publishes merged knowledge for SUB1 at **SURFACE_RELAY**. |
+| `/relay/sub2` | `custom_msg/Plan` | MID | All | Same for SUB2. |
+| `/relay/mid`  | `custom_msg/Plan` | MID | All | Same for MID. |
+| `/relay/snapshot_json` | `std_msgs/String` | MID | Bridge | JSON snapshot of **plans by role** and **by identity** keyed on numeric `Identity`. |
+| `/relay/events_json` | `std_msgs/String` | MID | Bridge | JSON uplink of most recent events per role and “new since surface” counters. |
+| `/events/sub1` | `custom_msg/Event` | SUB1 | All | Event stream produced by current SUB1 holder at **SURFACE_INIT**. |
+| `/events/sub2` | `custom_msg/Event` | SUB2 | All | Same for SUB2. |
+| `/events/mid`  | `custom_msg/Event` | MID  | All | MID events (optional, used in counters/uplink). |
+| `/expected/sub1/pose` | `geometry_msgs/PoseStamped` | All | — | Locally estimated SUB1 position at **now** via plan interpolation. |
+| `/expected/sub2/pose` | `geometry_msgs/PoseStamped` | All | — | Same for SUB2. |
+| `/expected/mid/pose`  | `geometry_msgs/PoseStamped` | All | — | Same for MID. |
+
+**QoS**: Default (history depth 10). For field tests, set `reliable` on `/plans/*`, `/relay/*`, `/events/*`, keep `best_effort` on `/expected/*` if needed.
+
+
+## ROS Behavior Logic: How the Node Thinks and Acts
+
+This section explains the runtime behavior of `SubNode`—how roles rotate, how topics are used, what happens each slot, and how plans/events are merged and relayed. It is written to mirror the code structure so you can map each behavior to a function.
+
+---
+
+### 1) Node Lifecycle & Startup Sequence
+
+**Boot flow**
+1. `main()` creates a temporary `bootstrap` node to read `sub_id`.
+2. `SubNode(sub_id)` is constructed:
+   - Declares/reads parameters (`team_ids`, `leader_id`, `Identity`, `team_identity_numbers`, `state_dwell_s`, `start_epoch`, `publish_current_pose`).
+   - Validates that `leader_id ∈ team_ids`, dedupes `team_ids`, aligns `team_identity_numbers`.
+   - Computes `leader0_idx_` and **auto-assigns** `start_epoch_ = ceil(now)+2` if unset.
+   - Creates all publishers & subscribers (role-scoped topics).
+   - Starts a **0.25 s** wall timer → `tick()`.
+
+**Initialization guarantees**
+- Role topics `/plans/{sub1,sub2,mid}` are always present.
+- Per-identity map is pre-seeded on first `SURFACE_INIT` via `ensureSeedPlans()`.
+- If publishing pose for testing, `/<sub_id>/pose` mirrors the target for quick visualization.
+
+---
+
+### 2) Time, Rotation, and Roles
+
+The **timekeeper** is `compute(t)`:
+- **Cycle**: `T = 5 * dwell_s_`
+- **Slot**: `slot5 = floor(((t - start_epoch_) mod T) / dwell_s_) ∈ {0..4}`
+- **Role holders** for this cycle:
+  - `id_mid  = team_ids_[(leader0_idx_ + cycles) % N]`
+  - `id_s1   = team_ids_[(leader0_idx_ + cycles + 1) % N]`
+  - `id_s2   = team_ids_[(leader0_idx_ + cycles + 2) % N]`
+- Your **current role** is derived by comparing `sub_id_` with role holders.
+
+**Why role topics are stable:**  
+Even though role holders rotate, the **topic names stay fixed** (`/plans/sub1`, `/plans/sub2`, `/plans/mid`). This makes monitor/bridging logic simpler and avoids re-wiring subscriptions every rotation.
+
+---
+
+### 3) Per-Tick Behavior (`tick()`)
+
+Executed every **0.25 s**:
+- Recompute schedule `sch = compute(now)`.
+- Detect slot changes and call `onSlotEnter(sch)` once per slot.
+- Publish per-tick **target**:
+  - MID → `midTarget(sch.mid_state)`
+  - SUB1 → `sub1Target(sch.sub_state)`
+  - SUB2 → `sub2Target(sch.sub_state)`
+  - Topic: `/<sub_id>/target_pose`
+  - Optional: also publish as `/<sub_id>/pose` when `publish_current_pose=true`
+- Publish **expected poses** (interpolations from merged plans):
+  - `/expected/sub1/pose`, `/expected/sub2/pose`, `/expected/mid/pose`
+- Throttled log with role, slot, dwell, “new-since-surface” counters.
+
+**Design note:**  
+All node-to-node sync happens via topics; **no services** and **no shared memory** are used.
+
+---
+
+### 4) Slot Entry Behavior (`onSlotEnter(sch)`)
+
+Triggered **once** when `slot5` or `id_mid` changes.
+
+**If you are SUB1/SUB2:**
+- At `SURFACE_INIT` (slot 0), publish a **local event** with your current target:
+  - `publishMyEventIfNeeded(sch)` → `/events/sub1` or `/events/sub2`
+  - `event_type` comes from `last_local_event_type_` (if set by your higher-level logic)
+
+**If you are MID:**
+- **Slot 0 – SURFACE_INIT**
+  - `ensureSeedPlans()` → ensures role plans are non-empty
+  - `resetAddedSinceSurface()` → zero “new points” counters
+  - `uplinkEventsJSON(sch)` → summarize latest events + counters to `/relay/events_json`
+- **Slot 1 – HANDOFF_1**
+  - `midHandoffOnce("sub1", sch.id_s1)` → publish current `/plans/sub1` and `/plans/mid` **once**
+  - Echo previous MID plan on `/echo/mid` (for diagnostics/backfill)
+- **Slot 2 – HANDOFF_2**
+  - Same as slot 1, but for `"sub2"`
+- **Slot 3 – SURFACE_RELAY**
+  - `surfaceRelayAggregate()`:
+    - Publish merged role knowledge on `/relay/{sub1,sub2,mid}`
+    - Produce **by-identity** JSON snapshot to `/relay/snapshot_json`
+    - Reset “new-since-surface” counters
+- **Slot 4 – RETURN_END**
+  - Navigation only; no messaging beyond status logs
+
+**One-shot protection:**  
+Handoff publishers are gated by `published_this_slot_` to prevent duplicate bursts.
+
+## Reporting, Snapshots, and IoT Bridge Integration
+
+The ROS 2 side of the system continuously builds a **structured data layer** describing the swarm’s real-time state.  
+At key synchronization points, this data is published as **JSON snapshots** for the IoT bridge to forward to AWS IoT Core via MQTT5.
+
+This ensures a robust **ROS → IoT → Cloud feedback loop**, where local multi-robot coordination is preserved even when the cloud connection is intermittent.
+
+---
+
+### Snapshot Overview
+
+Each cycle (5 slots, total duration = `5 * dwell_s` seconds) has **two primary reporting phases**:
+
+| Phase | Slot | Trigger | Publisher Role | Topic | Description |
+|-------|------|----------|----------------|--------|--------------|
+| **Events Report** | 0 – `SURFACE_INIT` | Beginning of each cycle | MID_TIER | `/relay/events_json` | Summarizes recent events reported by all roles (sub1, sub2, mid). |
+| **Plans Snapshot** | 3 – `SURFACE_RELAY` | Midway through the cycle | MID_TIER | `/relay/snapshot_json` | Full snapshot of merged plans, per-role and per-identity, for archival and cloud sync. |
+
+Both snapshots are text-based JSON strings published on `std_msgs/String` topics and subscribed by the **IoT bridge**.
+
+---
+
+### 1. Events Report (`/relay/events_json`)
+
+Triggered at **SURFACE_INIT** (slot 0) by the MID node.
+
+**Purpose:**  
+- Provides a compact view of mission events from the previous cycle (e.g., detection, faults, telemetry flags).
+- Resets counters after every uplink.
+- Guarantees the bridge gets one event packet per cycle, even under rotation.
+
+**JSON structure example:**
+```json
+{
+  "kind": "surface_relay_snapshot",
+  "sender": "subMID_node",
+  "Identity": 0,
+  "role": "MID_TIER",
+  "cycle": {
+    "epoch": 1760070000,
+    "dwell_s": 20.0,
+    "slot": 0
+  },
+  "events": {
+    "mid":  {"event_type": "nothing_new", "x": 0, "y": 0, "z": 0},
+    "sub1": {"event_type": "foreign_uuv", "x": 35, "y": 20, "z": -20},
+    "sub2": {"event_type": "low_battery", "x": 20, "y": 40, "z": -20}
+  },
+  "new_counts": {"mid": 0, "sub1": 2, "sub2": 1},
+  "sent_at": 1760070020.42
+}
+```
 ---
 
 # License & acknowledgements
